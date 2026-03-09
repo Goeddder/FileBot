@@ -1,7 +1,6 @@
 import asyncio
 import aiosqlite
 import os
-import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -21,15 +20,12 @@ class BotStates(StatesGroup):
     waiting_for_welcome_photo = State()
     waiting_for_file_number = State()
 
-# --- БАЗА ДАННЫХ ---
 async def init_db():
     async with aiosqlite.connect("files.db") as db:
-        # Убеждаемся, что ID — это INTEGER PRIMARY KEY
         await db.execute("CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, file_id TEXT)")
         await db.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
         await db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-        
-        default_text = "✋ Привет, {name}! Ты в боте @PlutoniumfilesBot\nХранилище файлов канала @OfficialPlutonium"
+        default_text = "✋ Привет, {name}! Ты в боте @PlutoniumfilesBot\nХранилище файлов @OfficialPlutonium"
         await db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('welcome_text', ?)", (default_text,))
         await db.commit()
 
@@ -50,106 +46,91 @@ def get_channel_kb():
         [InlineKeyboardButton(text="Наш канал 📢", url="https://t.me/OfficialPlutonium")]
     ])
 
-# --- ЛОГИКА /START ---
+# --- ИСПРАВЛЕННАЯ ВЫДАЧА ФАЙЛА ---
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject, state: FSMContext):
-    # Сброс любого состояния админа при нажатии старт
     await state.clear()
-    
     async with aiosqlite.connect("files.db") as db:
         await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
         await db.commit()
 
-    # ЕСЛИ ПЕРЕШЛИ ЗА ФАЙЛОМ
     if command.args:
-        file_arg = command.args
-        print(f"DEBUG: Поиск файла с ID: {file_arg}") # Увидишь в консоли Pydroid
+        file_arg = str(command.args) # Принудительно в строку
 
         if not await is_subscribed(message.from_user.id):
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Подписаться 📢", url="https://t.me/OfficialPlutonium")],
-                [InlineKeyboardButton(text="✅ Я подписался", callback_data=f"check_{file_arg}")]
+                # Короткий callback для избежания ошибок длины
+                [InlineKeyboardButton(text="✅ Я подписался", callback_data=f"chk_{file_arg}")]
             ])
-            await message.answer("⚠️ Для доступа к файлу нужно быть в канале!", reply_markup=kb)
+            await message.answer("⚠️ Подпишись на канал, чтобы получить файл!", reply_markup=kb)
             return
 
         async with aiosqlite.connect("files.db") as db:
-            # Ищем файл, преобразуя аргумент в число
-            async with db.execute("SELECT file_id FROM files WHERE id = ?", (file_arg,)) as cursor:
+            # Ищем, преобразуя и то и другое в строку для 100% совпадения
+            async with db.execute("SELECT file_id FROM files WHERE CAST(id AS TEXT) = ?", (file_arg,)) as cursor:
                 row = await cursor.fetchone()
                 if row:
-                    await message.answer_document(document=row[0], caption=f"✅ Файл #{file_arg} готов!", reply_markup=get_channel_kb())
+                    await message.answer_document(document=row[0], caption=f"✅ Файл №{file_arg}", reply_markup=get_channel_kb())
                 else:
-                    await message.answer(f"❌ Файл с номером {file_arg} не найден в базе.")
+                    await message.answer(f"❌ Файл {file_arg} не найден. Проверь номер.")
         return
 
-    # ОБЫЧНЫЙ СТАРТ
     welcome_template = await get_setting('welcome_text')
     name = message.from_user.first_name or "Друг"
     welcome_text = welcome_template.replace("{name}", name)
     photo = await get_setting('welcome_photo')
+    if photo: await message.answer_photo(photo=photo, caption=welcome_text)
+    else: await message.answer(welcome_text)
 
-    if photo:
-        await message.answer_photo(photo=photo, caption=welcome_text)
+# --- ИСПРАВЛЕННЫЙ CALLBACK ---
+
+@dp.callback_query(F.data.startswith("chk_"))
+async def check_btn(call: types.CallbackQuery):
+    f_num = str(call.data.split("_")[1]) # Получаем номер файла из кнопки
+    
+    if await is_subscribed(call.from_user.id):
+        # Если подписан - сразу ищем файл
+        async with aiosqlite.connect("files.db") as db:
+            async with db.execute("SELECT file_id FROM files WHERE CAST(id AS TEXT) = ?", (f_num,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    await call.message.delete() # Удаляем просьбу о подписке
+                    await call.message.answer_document(document=row[0], reply_markup=get_channel_kb())
+                else:
+                    await call.answer("❌ Ошибка: файл исчез из базы!", show_alert=True)
     else:
-        await message.answer(welcome_text)
+        await call.answer("❌ Ты всё еще не подписан!", show_alert=True)
 
-# --- РУЧНОЕ ДОБАВЛЕНИЕ НОМЕРА (ТВОЙ ЗАПРОС) ---
+# --- АДМИНКА ---
 
 @dp.message(F.document | F.video | F.photo)
 async def admin_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID or await state.get_state(): return
-    
     f_id = message.document.file_id if message.document else (message.video.file_id if message.video else message.photo[-1].file_id)
     await state.update_data(temp_f_id=f_id, temp_type=message.content_type)
-    
-    await message.answer("📥 Файл принят! Введи **НОМЕР** для этого файла:")
+    await message.answer("📥 Файл принят! Введи **НОМЕР**:")
     await state.set_state(BotStates.waiting_for_file_number)
 
 @dp.message(BotStates.waiting_for_file_number)
 async def save_with_number(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        await message.answer("❌ Введи только ЧИСЛО!")
+        await message.answer("❌ Введи только число!")
         return
-
     num = int(message.text)
     data = await state.get_data()
-    f_id = data['temp_f_id']
-
     async with aiosqlite.connect("files.db") as db:
-        # Проверяем на дубликат
-        async with db.execute("SELECT id FROM files WHERE id = ?", (num,)) as cursor:
-            if await cursor.fetchone():
-                await message.answer(f"⚠️ Номер {num} уже используется. Введи другой:")
-                return
-        
-        await db.execute("INSERT INTO files (id, file_id) VALUES (?, ?)", (num, f_id))
+        await db.execute("INSERT OR REPLACE INTO files (id, file_id) VALUES (?, ?)", (num, data['temp_f_id']))
         await db.commit()
-
-    await message.answer(f"✅ Сохранено под №{num}!\nСсылка: `https://t.me/{BOT_USERNAME}?start={num}`", parse_mode="Markdown")
+    await message.answer(f"✅ Сохранено под №{num}!\nСсылка: `https://t.me/{BOT_USERNAME}?start={num}`")
     await state.clear()
 
-# --- ПРОВЕРКА ПО КНОПКЕ ---
-@dp.callback_query(F.data.startswith("check_"))
-async def check_btn(call: types.CallbackQuery):
-    f_num = call.data.split("_")[1]
-    if await is_subscribed(call.from_user.id):
-        await call.message.delete()
-        async with aiosqlite.connect("files.db") as db:
-            async with db.execute("SELECT file_id FROM files WHERE id = ?", (f_num,)) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    await call.message.answer_document(document=row[0], reply_markup=get_channel_kb())
-    else:
-        await call.answer("❌ Ты не подписан!", show_alert=True)
-
-# --- ОСТАЛЬНОЕ ---
 @dp.message(Command("redacted"))
 async def red_cmd(message: types.Message):
     if message.from_user.id == ADMIN_ID:
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🖼 Сменить фото", callback_data="edit_photo")]])
-        await message.answer("Редактор приветствия:", reply_markup=kb)
+        await message.answer("Редактор:", reply_markup=kb)
 
 @dp.callback_query(F.data == "edit_photo")
 async def edit_p(call: types.CallbackQuery, state: FSMContext):
@@ -163,7 +144,7 @@ async def save_p(message: types.Message, state: FSMContext):
         await db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('welcome_photo', ?)", (p_id,))
         await db.commit()
     await state.clear()
-    await message.answer("✅ Готово!")
+    await message.answer("✅ Фото обновлено!")
 
 async def main():
     await init_db()
@@ -172,4 +153,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
