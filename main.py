@@ -22,7 +22,8 @@ class BotStates(StatesGroup):
 
 async def init_db():
     async with aiosqlite.connect("files.db") as db:
-        await db.execute("CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, file_id TEXT)")
+        # ДОБАВИЛИ колонку file_type для точной отправки
+        await db.execute("CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, file_id TEXT, file_type TEXT)")
         await db.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
         await db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
         default_text = "✋ Привет, {name}! Ты в боте @PlutoniumfilesBot\nХранилище файлов @OfficialPlutonium"
@@ -46,7 +47,21 @@ def get_channel_kb():
         [InlineKeyboardButton(text="Наш канал 📢", url="https://t.me/OfficialPlutonium")]
     ])
 
-# --- ИСПРАВЛЕННАЯ ВЫДАЧА ФАЙЛА ---
+# Универсальная функция отправки контента (чтобы не терялись из-за неверного метода)
+async def send_any_file(chat_id, file_id, file_type, caption, reply_markup):
+    try:
+        if file_type == 'photo':
+            await bot.send_photo(chat_id, photo=file_id, caption=caption, reply_markup=reply_markup)
+        elif file_type == 'video':
+            await bot.send_video(chat_id, video=file_id, caption=caption, reply_markup=reply_markup)
+        else: # document и все остальное
+            await bot.send_document(chat_id, document=file_id, caption=caption, reply_markup=reply_markup)
+        return True
+    except Exception as e:
+        print(f"Ошибка отправки: {e}")
+        return False
+
+# --- ВЫДАЧА ФАЙЛА ---
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject, state: FSMContext):
@@ -56,25 +71,25 @@ async def start_handler(message: types.Message, command: CommandObject, state: F
         await db.commit()
 
     if command.args:
-        file_arg = str(command.args) # Принудительно в строку
+        file_arg = str(command.args)
 
         if not await is_subscribed(message.from_user.id):
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Подписаться 📢", url="https://t.me/OfficialPlutonium")],
-                # Короткий callback для избежания ошибок длины
                 [InlineKeyboardButton(text="✅ Я подписался", callback_data=f"chk_{file_arg}")]
             ])
             await message.answer("⚠️ Подпишись на канал, чтобы получить файл!", reply_markup=kb)
             return
 
         async with aiosqlite.connect("files.db") as db:
-            # Ищем, преобразуя и то и другое в строку для 100% совпадения
-            async with db.execute("SELECT file_id FROM files WHERE CAST(id AS TEXT) = ?", (file_arg,)) as cursor:
+            async with db.execute("SELECT file_id, file_type FROM files WHERE CAST(id AS TEXT) = ?", (file_arg,)) as cursor:
                 row = await cursor.fetchone()
                 if row:
-                    await message.answer_document(document=row[0], caption=f"✅ Файл №{file_arg}", reply_markup=get_channel_kb())
+                    success = await send_any_file(message.chat.id, row[0], row[1], f"✅ Файл №{file_arg}", get_channel_kb())
+                    if not success:
+                        await message.answer("❌ Ошибка при попытке отправить файл. Возможно, он удален из серверов Telegram.")
                 else:
-                    await message.answer(f"❌ Файл {file_arg} не найден. Проверь номер.")
+                    await message.answer(f"❌ Файл {file_arg} не найден.")
         return
 
     welcome_template = await get_setting('welcome_text')
@@ -84,20 +99,19 @@ async def start_handler(message: types.Message, command: CommandObject, state: F
     if photo: await message.answer_photo(photo=photo, caption=welcome_text)
     else: await message.answer(welcome_text)
 
-# --- ИСПРАВЛЕННЫЙ CALLBACK ---
+# --- CALLBACK ---
 
 @dp.callback_query(F.data.startswith("chk_"))
 async def check_btn(call: types.CallbackQuery):
-    f_num = str(call.data.split("_")[1]) # Получаем номер файла из кнопки
+    f_num = str(call.data.split("_")[1])
     
     if await is_subscribed(call.from_user.id):
-        # Если подписан - сразу ищем файл
         async with aiosqlite.connect("files.db") as db:
-            async with db.execute("SELECT file_id FROM files WHERE CAST(id AS TEXT) = ?", (f_num,)) as cursor:
+            async with db.execute("SELECT file_id, file_type FROM files WHERE CAST(id AS TEXT) = ?", (f_num,)) as cursor:
                 row = await cursor.fetchone()
                 if row:
-                    await call.message.delete() # Удаляем просьбу о подписке
-                    await call.message.answer_document(document=row[0], reply_markup=get_channel_kb())
+                    await call.message.delete()
+                    await send_any_file(call.message.chat.id, row[0], row[1], f"✅ Файл №{f_num}", get_channel_kb())
                 else:
                     await call.answer("❌ Ошибка: файл исчез из базы!", show_alert=True)
     else:
@@ -108,9 +122,17 @@ async def check_btn(call: types.CallbackQuery):
 @dp.message(F.document | F.video | F.photo)
 async def admin_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID or await state.get_state(): return
-    f_id = message.document.file_id if message.document else (message.video.file_id if message.video else message.photo[-1].file_id)
-    await state.update_data(temp_f_id=f_id, temp_type=message.content_type)
-    await message.answer("📥 Файл принят! Введи **НОМЕР**:")
+    
+    # Определяем тип и ID корректно
+    if message.document:
+        f_id, f_type = message.document.file_id, 'document'
+    elif message.video:
+        f_id, f_type = message.video.file_id, 'video'
+    elif message.photo:
+        f_id, f_type = message.photo[-1].file_id, 'photo'
+    
+    await state.update_data(temp_f_id=f_id, temp_type=f_type)
+    await message.answer(f"📥 {f_type.capitalize()} принят! Введи **НОМЕР**:")
     await state.set_state(BotStates.waiting_for_file_number)
 
 @dp.message(BotStates.waiting_for_file_number)
@@ -121,11 +143,14 @@ async def save_with_number(message: types.Message, state: FSMContext):
     num = int(message.text)
     data = await state.get_data()
     async with aiosqlite.connect("files.db") as db:
-        await db.execute("INSERT OR REPLACE INTO files (id, file_id) VALUES (?, ?)", (num, data['temp_f_id']))
+        # Сохраняем и ID и ТИП
+        await db.execute("INSERT OR REPLACE INTO files (id, file_id, file_type) VALUES (?, ?, ?)", 
+                         (num, data['temp_f_id'], data['temp_type']))
         await db.commit()
     await message.answer(f"✅ Сохранено под №{num}!\nСсылка: `https://t.me/{BOT_USERNAME}?start={num}`")
     await state.clear()
 
+# --- Остальные функции без изменений ---
 @dp.message(Command("redacted"))
 async def red_cmd(message: types.Message):
     if message.from_user.id == ADMIN_ID:
@@ -153,3 +178,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
