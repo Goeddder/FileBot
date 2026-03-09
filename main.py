@@ -88,7 +88,7 @@ async def start_broadcast(message: types.Message):
 # Остальные команды...
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    await message.answer(f"Добро пожаловать {message.from_user.first_name}Ты в боте PlutoniumFilesBot!")
+    await message.answer(f"Привет, {message.from_user.first_name}!")
 
 @dp.message(F.document | F.photo | F.video)
 async def save_file(message: types.Message):
@@ -111,4 +111,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                                              
+    
