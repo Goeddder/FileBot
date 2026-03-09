@@ -1,140 +1,68 @@
-import asyncio
-import aiosqlite
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import sqlite3
 import os
-import logging
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, CommandStart, CommandObject
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 
 # --- НАСТРОЙКИ ---
-API_TOKEN = '8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw'
-BOT_USERNAME = "plutoniumfilesBot"
-CHANNEL_ID = "@OfficialPlutonium"
-ADMIN_ID = 1471307057
+API_ID = 1234567  # Получи на my.telegram.org
+API_HASH = "твои_данные"
+BOT_TOKEN = "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw"
 DOWNLOAD_DIR = "downloads"
-
-# Настройка логирования для отслеживания ошибок
-logging.basicConfig(level=logging.INFO)
 
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
+app = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-class BotStates(StatesGroup):
-    waiting_for_file_number = State()
+# База данных
+def init_db():
+    conn = sqlite3.connect("files.db")
+    conn.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, type TEXT, path TEXT)")
+    conn.commit()
+    conn.close()
 
-async def init_db():
-    async with aiosqlite.connect("files.db") as db:
-        await db.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, file_type TEXT, file_path TEXT)")
-        await db.commit()
+# --- ЛОГИКА ОТПРАВКИ ---
+@app.on_message(filters.command("start"))
+async def start_handler(client, message):
+    if len(message.command) > 1:
+        file_id = message.command[1]
+        conn = sqlite3.connect("files.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT type, path FROM files WHERE id = ?", (file_id,))
+        row = cursor.fetchone()
+        conn.close()
 
-async def is_subscribed(user_id):
-    try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except:
-        return False
-
-# --- СИСТЕМА ПОВТОРНЫХ ПОПЫТОК (РЕКУРСИВНЫЙ ПОИСК) ---
-async def send_file_with_retry(chat_id, file_type, file_path, caption, attempt=1):
-    if not os.path.exists(file_path):
-        await bot.send_message(chat_id, "❌ Файл не найден в локальном хранилище.")
-        return False
-
-    try:
-        markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Наш канал 📢", url="https://t.me/OfficialPlutonium")]
-        ])
-        file = FSInputFile(file_path)
-        
-        if file_type == 'photo': await bot.send_photo(chat_id, photo=file, caption=caption, reply_markup=markup)
-        elif file_type == 'video': await bot.send_video(chat_id, video=file, caption=caption, reply_markup=markup)
-        else: await bot.send_document(chat_id, document=file, caption=caption, reply_markup=markup)
-        return True
-
-    except Exception as e:
-        if attempt <= 3:
-            wait_time = attempt * 2
-            logging.warning(f"Попытка {attempt} не удалась: {e}. Ждем {wait_time} сек...")
-            await asyncio.sleep(wait_time)
-            return await send_file_with_retry(chat_id, file_type, file_path, caption, attempt + 1)
+        if row:
+            f_type, f_path = row
+            # Pyrogram сам умеет отправлять файлы с диска максимально быстро
+            try:
+                if f_type == 'photo': await message.reply_photo(f_path)
+                elif f_type == 'video': await message.reply_video(f_path)
+                else: await message.reply_document(f_path)
+            except Exception as e:
+                await message.reply(f"Ошибка: {e}")
         else:
-            await bot.send_message(chat_id, "⚠️ Ошибка: не удалось отправить файл после 3 попыток. Попробуй позже.")
-            return False
+            await message.reply("❌ Файл не найден.")
 
-# --- ОБРАБОТЧИКИ ---
-
-@dp.message(CommandStart())
-async def start_handler(message: types.Message, command: CommandObject):
-    if command.args:
-        file_arg = str(command.args)
-        if not await is_subscribed(message.from_user.id):
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Подписаться 📢", url="https://t.me/OfficialPlutonium")],
-                [InlineKeyboardButton(text="✅ Я подписался", callback_data=f"chk_{file_arg}")]
-            ])
-            await message.answer("⚠️ Подпишись на канал, чтобы получить файл!", reply_markup=kb)
-            return
-
-        async with aiosqlite.connect("files.db") as db:
-            async with db.execute("SELECT file_type, file_path FROM files WHERE id = ?", (file_arg,)) as cursor:
-                row = await cursor.fetchone()
-                if row: await send_file_with_retry(message.chat.id, row[0], row[1], f"✅ Файл №{file_arg}")
-                else: await message.answer("❌ Файл не найден.")
-        return
-
-    await message.answer("✋ Привет! Используй /start <номер> для получения файла.")
-
-@dp.callback_query(F.data.startswith("chk_"))
-async def check_btn(call: types.CallbackQuery):
-    f_num = call.data.split("_")[1]
-    if await is_subscribed(call.from_user.id):
-        async with aiosqlite.connect("files.db") as db:
-            async with db.execute("SELECT file_type, file_path FROM files WHERE id = ?", (f_num,)) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    await call.message.delete()
-                    await send_file_with_retry(call.message.chat.id, row[0], row[1], f"✅ Файл №{f_num}")
-                else: await call.answer("❌ Файл не найден!")
-    else: await call.answer("❌ Вы еще не подписаны!", show_alert=True)
-
-@dp.message(F.document | F.video | F.photo)
-async def admin_upload(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
+# --- АДМИН-ЗАГРУЗКА ---
+@app.on_message(filters.document | filters.video | filters.photo)
+async def admin_upload(client, message):
+    # Логика сохранения аналогична: скачиваем файл, пишем путь в БД
+    file_path = await message.download(file_name=DOWNLOAD_DIR + "/")
     
-    if message.document: f_type, f_name = 'doc', message.document.file_name or "file.bin"
-    elif message.video: f_type, f_name = 'video', f"v_{message.video.file_unique_id}.mp4"
-    else: f_type, f_name = 'photo', f"p_{message.photo[-1].file_unique_id}.jpg"
-
-    file_id = message.document.file_id if message.document else (message.video.file_id if message.video else message.photo[-1].file_id)
-    file_info = await bot.get_file(file_id)
-    local_path = os.path.join(DOWNLOAD_DIR, f_name)
-    await bot.download_file(file_info.file_path, local_path)
+    # Запрашиваем ID файла через FSM (в Pyrogram реализовано через обработчики сообщений)
+    await message.reply("📥 Файл принят! Введи ID для этого файла:")
     
-    await state.update_data(temp_type=f_type, temp_path=local_path)
-    await message.answer("📥 Файл сохранен! Введи **номер или название**:")
-    await state.set_state(BotStates.waiting_for_file_number)
+    # Ожидаем следующее сообщение с ID (используем фильтр)
+    @app.on_message(filters.text, group=1)
+    async def get_id(c, m):
+        conn = sqlite3.connect("files.db")
+        conn.execute("INSERT OR REPLACE INTO files VALUES (?, ?, ?)", (m.text, "doc", file_path))
+        conn.commit()
+        conn.close()
+        await m.reply(f"✅ Готово! Ссылка: t.me/plutoniumfilesBot?start={m.text}")
+        # Удаляем обработчик после получения ID
+        c.remove_handler(get_id, group=1)
 
-@dp.message(BotStates.waiting_for_file_number)
-async def save_with_number(message: types.Message, state: FSMContext):
-    f_key = message.text.strip()
-    data = await state.get_data()
-    async with aiosqlite.connect("files.db") as db:
-        await db.execute("INSERT OR REPLACE INTO files (id, file_type, file_path) VALUES (?, ?, ?)", 
-                         (f_key, data['temp_type'], data['temp_path']))
-        await db.commit()
-    await message.answer(f"✅ Готово! Ссылка: https://t.me/{BOT_USERNAME}?start={f_key}")
-    await state.clear()
-
-async def main():
-    await init_db()
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-    
+init_db()
+app.run()
