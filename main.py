@@ -21,7 +21,7 @@ install_requirements()
 API_ID = int(os.environ.get("API_ID", 39522849))
 API_HASH = os.environ.get("API_HASH", "26909eddad0be2400fb765fad0e267f8")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw")
-CHANNEL_URL = "https://t.me/ТВОЯ_ССЫЛКА_НА_КАНАЛ" # ЗАМЕНИ НА СВОЮ
+CHANNEL_URL = "https://t.me/OfficialPlutonium" # ЗАМЕНИ НА СВОЮ
 
 # Папка для файлов (в Railway используй /app/downloads)
 BASE_DIR = "/app/downloads"
