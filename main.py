@@ -1,24 +1,16 @@
 import os
 import sqlite3
 import secrets
-import subprocess
-import sys
 import time
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import UserNotParticipant, FloodWait
+from pyrogram.errors import UserNotParticipant
 
-# 1. АВТО-УСТАНОВКА БИБЛИОТЕК
-try:
-    import pyrogram
-except ImportError:
-    subprocess.call([sys.executable, "-m", "pip", "install", "pyrogram", "tgcrypto"])
-
-# 2. НАСТРОЙКИ
-API_ID = int(os.environ.get("API_ID", 39522849))
-API_HASH = os.environ.get("API_HASH", "26909eddad0be2400fb765fad0e267f8")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw")
+# 2. НАСТРОЙКИ (уже с твоими данными)
+API_ID = 39522849
+API_HASH = "26909eddad0be2400fb765fad0e267f8"
+BOT_TOKEN = "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw"
 ADMIN_ID = 1471307057  
 
 # КАНАЛ ДЛЯ ПОДПИСКИ
@@ -31,7 +23,13 @@ STORAGE_CHANNEL_URL = "https://t.me/IllyaTelegram"
 
 DB_PATH = "files.db"
 
-app = Client("plutonium_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client(
+    "plutonium_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    workers=10
+)
 
 # Прогресс отправки
 async def progress(current, total, message, start_time):
@@ -290,7 +288,7 @@ async def delete_file(client, message):
     except IndexError:
         await message.reply("❌ Использование: /del [хеш]")
 
-# --- ЗАГРУЗКА ФАЙЛА АДМИНОМ (БЕЗ ЛИШНИХ СООБЩЕНИЙ) ---
+# --- ЗАГРУЗКА ФАЙЛА АДМИНОМ ---
 @app.on_message((filters.document | filters.video | filters.photo) & filters.user(ADMIN_ID))
 async def admin_upload(client, message):
     # Сохраняем данные файла
@@ -307,7 +305,7 @@ async def admin_upload(client, message):
         f_type = 'doc'
         f_name = message.document.file_name or "Документ"
     
-    # Сразу просим описание (без лишних сообщений)
+    # Сразу просим описание
     await message.reply(
         f"📝 **Файл получен:** {f_name}\n\n"
         "✍️ **Отправь описание для файла**\n"
@@ -368,12 +366,13 @@ async def get_description(client, message):
     except Exception as e:
         await message.reply(f"❌ Ошибка: {e}")
 
-# Инициализация
-init_db()
-print("--- БОТ ЗАПУЩЕН ---")
-print(f"Канал подписки: {REQUIRED_CHANNEL}")
-print(f"Канал-хранилище: {STORAGE_CHANNEL}")
-print(f"Админ ID: {ADMIN_ID}")
-print("✅ Команды: /admin, /list, /broadcast, /stats, /del")
-
-app.run()
+# --- ЗАПУСК ---
+if __name__ == "__main__":
+    init_db()
+    print("--- БОТ ЗАПУЩЕН ---")
+    print(f"Канал подписки: {REQUIRED_CHANNEL}")
+    print(f"Канал-хранилище: {STORAGE_CHANNEL}")
+    print(f"Админ ID: {ADMIN_ID}")
+    print("✅ Команды: /admin, /list, /broadcast, /stats, /del")
+    
+    app.run()  # для Railway
