@@ -88,7 +88,7 @@ async def start_handler(client, message):
     conn.commit()
     conn.close()
     
-    # Кнопка на канал
+    # Кнопка на канал (всегда одна)
     channel_button = InlineKeyboardMarkup([[
         InlineKeyboardButton("📢 Канал Plutonium", url=REQUIRED_CHANNEL_URL)
     ]])
@@ -290,7 +290,7 @@ async def delete_file(client, message):
     except IndexError:
         await message.reply("❌ Использование: /del [хеш]")
 
-# --- ЗАГРУЗКА ФАЙЛА АДМИНОМ ---
+# --- ЗАГРУЗКА ФАЙЛА АДМИНОМ (БЕЗ ЛИШНИХ СООБЩЕНИЙ) ---
 @app.on_message((filters.document | filters.video | filters.photo) & filters.user(ADMIN_ID))
 async def admin_upload(client, message):
     # Сохраняем данные файла
@@ -307,10 +307,11 @@ async def admin_upload(client, message):
         f_type = 'doc'
         f_name = message.document.file_name or "Документ"
     
-    # Просим описание
+    # Сразу просим описание (без лишних сообщений)
     await message.reply(
-        f"📝 **Файл:** {f_name}\n\n"
-        "Отправь описание для файла (или /skip чтобы пропустить):"
+        f"📝 **Файл получен:** {f_name}\n\n"
+        "✍️ **Отправь описание для файла**\n"
+        "(или отправь /skip чтобы пропустить):"
     )
     
     # Сохраняем временно
@@ -354,14 +355,12 @@ async def get_description(client, message):
         
         share_url = f"https://t.me/{(await client.get_me()).username}?start={f_hash}"
         
+        # Отправляем ТОЛЬКО ссылку (без кнопок)
         await message.reply(
             f"✅ **Файл сохранен!**\n\n"
-            f"📁 Название: `{app.temp_file_data['f_name']}`\n"
-            f"📝 Описание: `{desc if desc else '—'}`\n"
-            f"🔗 Ссылка:\n`{share_url}`",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("📢 Канал", url=STORAGE_CHANNEL_URL)
-            ]])
+            f"📁 **Название:** {app.temp_file_data['f_name']}\n"
+            f"📝 **Описание:** {desc if desc else '—'}\n\n"
+            f"🔗 **Ссылка:**\n`{share_url}`"
         )
         
         del app.temp_file_data
