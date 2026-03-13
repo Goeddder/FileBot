@@ -18,7 +18,7 @@ except ImportError:
 # 2. НАСТРОЙКИ
 API_ID = int(os.environ.get("API_ID", 39522849))
 API_HASH = os.environ.get("API_HASH", "26909eddad0be2400fb765fad0e267f8")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw")  # ✅ НОВЫЙ ТОКЕН
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw")
 ADMIN_ID = 1471307057  
 
 # КАНАЛ ДЛЯ ПОДПИСКИ
@@ -57,6 +57,13 @@ def init_db():
     conn.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, joined_date TEXT)")
     conn.commit()
     conn.close()
+    
+    # Проверка базы при запуске
+    conn = sqlite3.connect(DB_PATH)
+    users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    files_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    conn.close()
+    print(f"📊 База данных: {users_count} пользователей, {files_count} файлов")
 
 # Проверка подписки
 async def check_subscription(client, user_id):
@@ -75,7 +82,13 @@ async def check_subscription(client, user_id):
 async def start_handler(client, message):
     user_id = message.from_user.id
     
-    # Кнопка только на канал (без подтверждения)
+    # Сохраняем пользователя в БД
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT OR IGNORE INTO users (user_id, joined_date) VALUES (?, datetime('now'))", (user_id,))
+    conn.commit()
+    conn.close()
+    
+    # Кнопка на канал
     channel_button = InlineKeyboardMarkup([[
         InlineKeyboardButton("📢 Канал Plutonium", url=REQUIRED_CHANNEL_URL)
     ]])
@@ -100,12 +113,8 @@ async def start_handler(client, message):
             reply_markup=channel_button
         )
 
-    # Сохраняем пользователя
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT OR IGNORE INTO users (user_id, joined_date) VALUES (?, datetime('now'))", (user_id,))
-    conn.commit()
-    
     # Поиск файла
+    conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT file_id, type, name, description FROM files WHERE hash = ?", (file_hash,)).fetchone()
     conn.close()
     
@@ -137,6 +146,150 @@ async def start_handler(client, message):
     else:
         await message.reply("❌ Файл не найден или ссылка недействительна.")
 
+# --- КОМАНДА /list (ДЛЯ АДМИНА) ---
+@app.on_message(filters.command("list") & filters.user(ADMIN_ID))
+async def list_files(client, message):
+    print(f"🔍 /list вызвана админом {message.from_user.id}")
+    
+    conn = sqlite3.connect(DB_PATH)
+    files = conn.execute("SELECT hash, name, description FROM files ORDER BY rowid DESC").fetchall()
+    conn.close()
+    
+    if not files:
+        await message.reply("📭 База пуста.")
+        return
+    
+    text = "📂 **Список файлов:**\n\n"
+    for h, name, desc in files:
+        url = f"https://t.me/{(await client.get_me()).username}?start={h}"
+        text += f"🔹 **{name}**\n"
+        if desc and desc.strip():
+            text += f"{desc}\n"
+        text += f"{url}\n\n"
+        
+        if len(text) > 3500:
+            await message.reply(text)
+            text = "📂 **Продолжение:**\n\n"
+    
+    if text:
+        await message.reply(text)
+
+# --- КОМАНДА /broadcast (ДЛЯ АДМИНА) ---
+@app.on_message(filters.command("broadcast") & filters.user(ADMIN_ID))
+async def broadcast_start(client, message):
+    print(f"📢 /broadcast вызвана админом {message.from_user.id}")
+    
+    await message.reply(
+        "📢 **Режим рассылки**\n\n"
+        "Отправь сообщение для рассылки всем пользователям.\n"
+        "❌ /cancel - отмена"
+    )
+    app.broadcast_mode = True
+
+@app.on_message(filters.user(ADMIN_ID) & ~filters.command("cancel") & ~filters.command("broadcast") & ~filters.command("list"))
+async def broadcast_send(client, message):
+    if not hasattr(app, 'broadcast_mode') or not app.broadcast_mode:
+        return
+    
+    print(f"📨 Начинаю рассылку...")
+    
+    conn = sqlite3.connect(DB_PATH)
+    users = conn.execute("SELECT user_id FROM users").fetchall()
+    conn.close()
+    
+    if not users:
+        await message.reply("📭 Нет пользователей для рассылки.")
+        app.broadcast_mode = False
+        return
+    
+    status_msg = await message.reply(f"⏳ Рассылка {len(users)} пользователям...")
+    
+    success = 0
+    failed = 0
+    
+    for i, (user_id,) in enumerate(users, 1):
+        try:
+            await message.copy(user_id)
+            success += 1
+        except Exception as e:
+            failed += 1
+            print(f"❌ Ошибка отправки {user_id}: {e}")
+        
+        if i % 10 == 0:
+            await status_msg.edit_text(f"⏳ Прогресс: {i}/{len(users)} (✅ {success} | ❌ {failed})")
+        
+        await asyncio.sleep(0.05)
+    
+    await status_msg.edit_text(f"✅ Рассылка завершена!\n✅ Успешно: {success}\n❌ Ошибок: {failed}")
+    app.broadcast_mode = False
+
+@app.on_message(filters.command("cancel") & filters.user(ADMIN_ID))
+async def broadcast_cancel(client, message):
+    if hasattr(app, 'broadcast_mode'):
+        app.broadcast_mode = False
+        await message.reply("❌ Рассылка отменена")
+        print("❌ Рассылка отменена")
+
+# --- КОМАНДА /admin (ДЛЯ АДМИНА) ---
+@app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
+async def admin_panel(client, message):
+    conn = sqlite3.connect(DB_PATH)
+    files_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    
+    text = (
+        f"👑 **Админ-панель**\n\n"
+        f"📁 Файлов: {files_count}\n"
+        f"👥 Пользователей: {users_count}\n\n"
+        f"**Команды:**\n"
+        f"/list - список файлов\n"
+        f"/broadcast - рассылка\n"
+        f"/stats - статистика\n"
+        f"/del [хеш] - удалить файл"
+    )
+    await message.reply(text)
+
+# --- КОМАНДА /stats (ДЛЯ АДМИНА) ---
+@app.on_message(filters.command("stats") & filters.user(ADMIN_ID))
+async def stats(client, message):
+    conn = sqlite3.connect(DB_PATH)
+    files_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    photos = conn.execute("SELECT COUNT(*) FROM files WHERE type='photo'").fetchone()[0]
+    videos = conn.execute("SELECT COUNT(*) FROM files WHERE type='video'").fetchone()[0]
+    docs = conn.execute("SELECT COUNT(*) FROM files WHERE type='doc'").fetchone()[0]
+    conn.close()
+    
+    text = (
+        f"📊 **Статистика**\n\n"
+        f"👥 Пользователей: {users_count}\n"
+        f"📁 Всего файлов: {files_count}\n"
+        f"├ Фото: {photos}\n"
+        f"├ Видео: {videos}\n"
+        f"└ Документы: {docs}"
+    )
+    await message.reply(text)
+
+# --- КОМАНДА /del (ДЛЯ АДМИНА) ---
+@app.on_message(filters.command("del") & filters.user(ADMIN_ID))
+async def delete_file(client, message):
+    try:
+        file_hash = message.command[1]
+        
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM files WHERE hash = ?", (file_hash,))
+        conn.commit()
+        affected = conn.total_changes
+        conn.close()
+        
+        if affected:
+            await message.reply(f"✅ Файл {file_hash} удален")
+        else:
+            await message.reply("❌ Файл не найден")
+    except IndexError:
+        await message.reply("❌ Использование: /del [хеш]")
+
 # --- ЗАГРУЗКА ФАЙЛА АДМИНОМ ---
 @app.on_message((filters.document | filters.video | filters.photo) & filters.user(ADMIN_ID))
 async def admin_upload(client, message):
@@ -167,7 +320,7 @@ async def admin_upload(client, message):
         "f_name": f_name
     }
 
-@app.on_message(filters.text & filters.user(ADMIN_ID) & ~filters.command("start"))
+@app.on_message(filters.text & filters.user(ADMIN_ID) & ~filters.command("start") & ~filters.command("list") & ~filters.command("broadcast") & ~filters.command("admin") & ~filters.command("stats") & ~filters.command("del") & ~filters.command("cancel"))
 async def get_description(client, message):
     if not hasattr(app, 'temp_file_data'):
         return
@@ -216,140 +369,12 @@ async def get_description(client, message):
     except Exception as e:
         await message.reply(f"❌ Ошибка: {e}")
 
-# --- СПИСОК ФАЙЛОВ (с описаниями) ---
-@app.on_message(filters.command("list") & filters.user(ADMIN_ID))
-async def list_files(client, message):
-    conn = sqlite3.connect(DB_PATH)
-    files = conn.execute("SELECT hash, name, description FROM files ORDER BY rowid DESC").fetchall()
-    conn.close()
-    
-    if not files: 
-        return await message.reply("📭 База пуста.")
-    
-    text = "📂 **Список файлов:**\n\n"
-    for h, name, desc in files:
-        url = f"https://t.me/{(await client.get_me()).username}?start={h}"
-        text += f"🔹 {name}\n"
-        if desc and desc.strip():
-            text += f"{desc}\n"
-        text += f"{url}\n\n"
-        
-        # Telegram лимит - 4096 символов
-        if len(text) > 3500:
-            await message.reply(text)
-            text = "📂 **Продолжение:**\n\n"
-    
-    if text:
-        await message.reply(text)
-
-# --- АДМИН-ПАНЕЛЬ (остальные команды) ---
-@app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
-async def admin_panel(client, message):
-    conn = sqlite3.connect(DB_PATH)
-    files_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-    users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    conn.close()
-    
-    text = (
-        f"👑 **Админ-панель**\n\n"
-        f"📁 Файлов: {files_count}\n"
-        f"👥 Пользователей: {users_count}\n\n"
-        f"**Команды:**\n"
-        f"/list - список файлов\n"
-        f"/broadcast - рассылка\n"
-        f"/stats - статистика\n"
-        f"/del [хеш] - удалить файл"
-    )
-    await message.reply(text)
-
-@app.on_message(filters.command("stats") & filters.user(ADMIN_ID))
-async def stats(client, message):
-    conn = sqlite3.connect(DB_PATH)
-    files_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-    users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    photos = conn.execute("SELECT COUNT(*) FROM files WHERE type='photo'").fetchone()[0]
-    videos = conn.execute("SELECT COUNT(*) FROM files WHERE type='video'").fetchone()[0]
-    docs = conn.execute("SELECT COUNT(*) FROM files WHERE type='doc'").fetchone()[0]
-    conn.close()
-    
-    text = (
-        f"📊 **Статистика**\n\n"
-        f"👥 Пользователей: {users_count}\n"
-        f"📁 Всего файлов: {files_count}\n"
-        f"├ Фото: {photos}\n"
-        f"├ Видео: {videos}\n"
-        f"└ Документы: {docs}"
-    )
-    await message.reply(text)
-
-@app.on_message(filters.command("broadcast") & filters.user(ADMIN_ID))
-async def broadcast_start(client, message):
-    await message.reply(
-        "📢 **Режим рассылки**\n\n"
-        "Отправь сообщение для рассылки всем пользователям.\n"
-        "❌ /cancel - отмена"
-    )
-    app.broadcast_mode = True
-
-@app.on_message(filters.user(ADMIN_ID) & ~filters.command("cancel"))
-async def broadcast_send(client, message):
-    if not hasattr(app, 'broadcast_mode') or not app.broadcast_mode:
-        return
-    
-    conn = sqlite3.connect(DB_PATH)
-    users = conn.execute("SELECT user_id FROM users").fetchall()
-    conn.close()
-    
-    status_msg = await message.reply(f"⏳ Рассылка {len(users)} пользователям...")
-    
-    success = 0
-    failed = 0
-    
-    for i, (user_id,) in enumerate(users, 1):
-        try:
-            await message.copy(user_id)
-            success += 1
-        except Exception:
-            failed += 1
-        
-        if i % 10 == 0:
-            await status_msg.edit_text(f"⏳ Прогресс: {i}/{len(users)} (✅ {success} | ❌ {failed})")
-        
-        await asyncio.sleep(0.05)
-    
-    await status_msg.edit_text(f"✅ Рассылка: ✅ {success} | ❌ {failed}")
-    app.broadcast_mode = False
-
-@app.on_message(filters.command("cancel") & filters.user(ADMIN_ID))
-async def broadcast_cancel(client, message):
-    if hasattr(app, 'broadcast_mode'):
-        app.broadcast_mode = False
-        await message.reply("❌ Рассылка отменена")
-
-@app.on_message(filters.command("del") & filters.user(ADMIN_ID))
-async def delete_file(client, message):
-    try:
-        file_hash = message.command[1]
-        
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("DELETE FROM files WHERE hash = ?", (file_hash,))
-        conn.commit()
-        affected = conn.total_changes
-        conn.close()
-        
-        if affected:
-            await message.reply(f"✅ Файл {file_hash} удален")
-        else:
-            await message.reply("❌ Файл не найден")
-    except IndexError:
-        await message.reply("❌ Использование: /del [хеш]")
-
 # Инициализация
 init_db()
 print("--- БОТ ЗАПУЩЕН ---")
 print(f"Канал подписки: {REQUIRED_CHANNEL}")
 print(f"Канал-хранилище: {STORAGE_CHANNEL}")
-print(f"Токен: {BOT_TOKEN}")
 print(f"Админ ID: {ADMIN_ID}")
+print("✅ Команды: /admin, /list, /broadcast, /stats, /del")
 
 app.run()
