@@ -1,4 +1,3 @@
-import os
 import sqlite3
 import secrets
 import time
@@ -7,7 +6,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import UserNotParticipant
 
-# 2. НАСТРОЙКИ (уже с твоими данными)
+# ========== ТВОИ ДАННЫЕ (вставь сюда) ==========
 API_ID = 39522849
 API_HASH = "26909eddad0be2400fb765fad0e267f8"
 BOT_TOKEN = "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw"
@@ -20,6 +19,7 @@ REQUIRED_CHANNEL_URL = "https://t.me/OfficialPlutonium"
 # КАНАЛ-ХРАНИЛИЩЕ
 STORAGE_CHANNEL = "@IllyaTelegram"
 STORAGE_CHANNEL_URL = "https://t.me/IllyaTelegram"
+# ================================================
 
 DB_PATH = "files.db"
 
@@ -28,7 +28,8 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workers=10
+    workers=10,
+    sleep_threshold=15
 )
 
 # Прогресс отправки
@@ -56,7 +57,6 @@ def init_db():
     conn.commit()
     conn.close()
     
-    # Проверка базы при запуске
     conn = sqlite3.connect(DB_PATH)
     users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     files_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
@@ -74,24 +74,20 @@ async def check_subscription(client, user_id):
         print(f"Subscription check error: {e}")
         return False
 
-# --- ОБРАБОТЧИКИ ---
-
+# --- СТАРТ ---
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     user_id = message.from_user.id
     
-    # Сохраняем пользователя в БД
     conn = sqlite3.connect(DB_PATH)
     conn.execute("INSERT OR IGNORE INTO users (user_id, joined_date) VALUES (?, datetime('now'))", (user_id,))
     conn.commit()
     conn.close()
     
-    # Кнопка на канал (всегда одна)
     channel_button = InlineKeyboardMarkup([[
         InlineKeyboardButton("📢 Канал Plutonium", url=REQUIRED_CHANNEL_URL)
     ]])
 
-    # Если это просто старт без параметров
     if len(message.command) == 1:
         welcome_text = (
             f"👋 Привет, {message.from_user.first_name}!\n\n"
@@ -100,10 +96,8 @@ async def start_handler(client, message):
         )
         return await message.reply(welcome_text, reply_markup=channel_button)
 
-    # Если есть параметр (попытка получить файл)
     file_hash = message.command[1]
     
-    # Проверка подписки
     is_subscribed = await check_subscription(client, user_id)
     if not is_subscribed:
         return await message.reply(
@@ -111,7 +105,6 @@ async def start_handler(client, message):
             reply_markup=channel_button
         )
 
-    # Поиск файла
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT file_id, type, name, description FROM files WHERE hash = ?", (file_hash,)).fetchone()
     conn.close()
@@ -120,7 +113,6 @@ async def start_handler(client, message):
         f_id, f_type, f_name, f_desc = row
         start_time = time.time()
         
-        # Формируем описание
         caption = f"📁 **{f_name}**"
         if f_desc and f_desc != "None" and f_desc.strip():
             caption += f"\n\n📝 {f_desc}"
@@ -144,7 +136,7 @@ async def start_handler(client, message):
     else:
         await message.reply("❌ Файл не найден или ссылка недействительна.")
 
-# --- КОМАНДА /list (ДЛЯ АДМИНА) ---
+# --- АДМИН КОМАНДЫ ---
 @app.on_message(filters.command("list") & filters.user(ADMIN_ID))
 async def list_files(client, message):
     print(f"🔍 /list вызвана админом {message.from_user.id}")
@@ -172,11 +164,9 @@ async def list_files(client, message):
     if text:
         await message.reply(text)
 
-# --- КОМАНДА /broadcast (ДЛЯ АДМИНА) ---
 @app.on_message(filters.command("broadcast") & filters.user(ADMIN_ID))
 async def broadcast_start(client, message):
     print(f"📢 /broadcast вызвана админом {message.from_user.id}")
-    
     await message.reply(
         "📢 **Режим рассылки**\n\n"
         "Отправь сообщение для рассылки всем пользователям.\n"
@@ -228,7 +218,6 @@ async def broadcast_cancel(client, message):
         await message.reply("❌ Рассылка отменена")
         print("❌ Рассылка отменена")
 
-# --- КОМАНДА /admin (ДЛЯ АДМИНА) ---
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
 async def admin_panel(client, message):
     conn = sqlite3.connect(DB_PATH)
@@ -248,7 +237,6 @@ async def admin_panel(client, message):
     )
     await message.reply(text)
 
-# --- КОМАНДА /stats (ДЛЯ АДМИНА) ---
 @app.on_message(filters.command("stats") & filters.user(ADMIN_ID))
 async def stats(client, message):
     conn = sqlite3.connect(DB_PATH)
@@ -269,7 +257,6 @@ async def stats(client, message):
     )
     await message.reply(text)
 
-# --- КОМАНДА /del (ДЛЯ АДМИНА) ---
 @app.on_message(filters.command("del") & filters.user(ADMIN_ID))
 async def delete_file(client, message):
     try:
@@ -288,10 +275,9 @@ async def delete_file(client, message):
     except IndexError:
         await message.reply("❌ Использование: /del [хеш]")
 
-# --- ЗАГРУЗКА ФАЙЛА АДМИНОМ ---
+# --- ЗАГРУЗКА ФАЙЛА ---
 @app.on_message((filters.document | filters.video | filters.photo) & filters.user(ADMIN_ID))
 async def admin_upload(client, message):
-    # Сохраняем данные файла
     if message.photo:
         f_id = message.photo.file_id
         f_type = 'photo'
@@ -305,14 +291,12 @@ async def admin_upload(client, message):
         f_type = 'doc'
         f_name = message.document.file_name or "Документ"
     
-    # Сразу просим описание
     await message.reply(
         f"📝 **Файл получен:** {f_name}\n\n"
         "✍️ **Отправь описание для файла**\n"
         "(или отправь /skip чтобы пропустить):"
     )
     
-    # Сохраняем временно
     app.temp_file_data = {
         "f_id": f_id,
         "f_type": f_type,
@@ -327,7 +311,6 @@ async def get_description(client, message):
     desc = message.text if message.text != "/skip" else ""
     
     try:
-        # Сохраняем в канал-хранилище
         if app.temp_file_data["f_type"] == 'photo':
             storage_msg = await client.send_photo(STORAGE_CHANNEL, app.temp_file_data["f_id"], 
                                                   caption=app.temp_file_data['f_name'])
@@ -338,10 +321,8 @@ async def get_description(client, message):
             storage_msg = await client.send_document(STORAGE_CHANNEL, app.temp_file_data["f_id"], 
                                                      caption=app.temp_file_data['f_name'])
         
-        # Генерируем хеш
         f_hash = secrets.token_urlsafe(8)
         
-        # Сохраняем в БД
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
             "INSERT INTO files (hash, file_id, type, name, description, storage_message_id) VALUES (?, ?, ?, ?, ?, ?)",
@@ -353,7 +334,6 @@ async def get_description(client, message):
         
         share_url = f"https://t.me/{(await client.get_me()).username}?start={f_hash}"
         
-        # Отправляем ТОЛЬКО ссылку (без кнопок)
         await message.reply(
             f"✅ **Файл сохранен!**\n\n"
             f"📁 **Название:** {app.temp_file_data['f_name']}\n"
@@ -375,4 +355,4 @@ if __name__ == "__main__":
     print(f"Админ ID: {ADMIN_ID}")
     print("✅ Команды: /admin, /list, /broadcast, /stats, /del")
     
-    app.run()  # для Railway
+    app.run()
