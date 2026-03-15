@@ -3,7 +3,6 @@ import sqlite3
 import secrets
 import subprocess
 import sys
-import time
 import asyncio
 import io
 from datetime import datetime, timedelta
@@ -347,6 +346,7 @@ async def main():
     print(f"💾 Канал-хранилище: {STORAGE_CHANNEL}")
     print("="*40 + "\n")
     
+    # Бесконечное ожидание
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
