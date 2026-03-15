@@ -9,15 +9,13 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
-import aiofiles
-import os
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw"
 ADMIN_ID = 1471307057
 CHANNEL_URL = "https://t.me/OfficialPlutonium"
-CHANNEL_ID = -1003607014773  # @OfficialPlutonium (ЗАМЕНИ НА РЕАЛЬНЫЙ ID)
-STORAGE_CHANNEL_ID = -1003677537552  # @IllyaTelegram (ЗАМЕНИ НА РЕАЛЬНЫЙ ID)
+CHANNEL_ID = -1003607014773  # @OfficialPlutonium
+STORAGE_CHANNEL_ID = -1003677537552  # @IllyaTelegram
 # ================================
 
 logging.basicConfig(level=logging.INFO)
@@ -67,7 +65,7 @@ def save_file(file_hash, file_id, file_name, caption):
     )
     conn.commit()
     conn.close()
-    logger.info(f"✅ Файл сохранен в БД: {file_hash}")
+    logger.info(f"✅ Файл {file_hash} сохранен в БД")
 
 def get_file(file_hash):
     conn = sqlite3.connect('files.db')
@@ -94,7 +92,7 @@ async def check_subscription(user_id: int) -> bool:
         return member.status not in ["left", "kicked"]
     except Exception as e:
         logger.error(f"Ошибка проверки подписки: {e}")
-        return False  # если ошибка — лучше не пускать
+        return False
 
 # ---------- КОМАНДА СТАРТ ----------
 @dp.message(Command("start"))
@@ -106,27 +104,22 @@ async def cmd_start(message: types.Message):
     save_user(user_id, username, first_name)
     logger.info(f"Пользователь {user_id} запустил бота")
 
-    # Кнопка подписки
     sub_button = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Канал Plutonium", url=CHANNEL_URL)]
     ])
 
-    # Если просто /start без параметров
     if len(message.text.split()) == 1:
         await message.answer(
             f"👋 Привет, {first_name}!\n\n"
-            f"Я бот Plutonium. Перейди по ссылке, чтобы получить файл.\n"
-            f"Если у тебя есть ссылка с кодом — отправь её мне.",
+            f"Я бот Plutonium. Перейди по ссылке, чтобы получить файл.",
             reply_markup=sub_button
         )
         return
 
-    # Если пришли по ссылке с хешем
     parts = message.text.split()
     if len(parts) > 1:
         file_hash = parts[1]
         
-        # Проверяем подписку
         if not await check_subscription(user_id):
             await message.answer(
                 "⚠️ **Доступ закрыт!**\nСначала подпишись на канал.",
@@ -134,7 +127,6 @@ async def cmd_start(message: types.Message):
             )
             return
 
-        # Ищем файл в базе
         file_info = get_file(file_hash)
         if not file_info:
             await message.answer("❌ Файл не найден или ссылка недействительна.")
@@ -142,7 +134,6 @@ async def cmd_start(message: types.Message):
 
         file_id, file_name, caption = file_info
         
-        # Отправляем файл
         try:
             await bot.send_document(
                 chat_id=message.chat.id,
@@ -155,7 +146,7 @@ async def cmd_start(message: types.Message):
             logger.error(f"Ошибка отправки файла: {e}")
             await message.answer("❌ Ошибка при отправке файла.")
 
-# ---------- ДОБАВЛЕНИЕ ФАЙЛА (АДМИН) ----------
+# ---------- ДОБАВЛЕНИЕ ФАЙЛА ----------
 @dp.message(Command("addfile"))
 async def cmd_addfile(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -164,7 +155,7 @@ async def cmd_addfile(message: types.Message):
     
     await message.answer(
         "📤 **Отправь файл** (документ, фото или видео).\n"
-        "В описании к файлу можешь указать название и описание."
+        "В описании можешь указать название и описание."
     )
 
 @dp.message(F.document | F.video | F.photo)
@@ -172,46 +163,43 @@ async def handle_file(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    # Определяем тип файла и получаем file_id
     if message.document:
         file_id = message.document.file_id
         file_name = message.document.file_name or "документ"
     elif message.video:
         file_id = message.video.file_id
         file_name = message.video.file_name or "видео"
-    else:  # фото
+    else:
         file_id = message.photo[-1].file_id
         file_name = "фото"
 
-    # Сохраняем в канал (для вечности)
+    # Пересылаем в канал для вечного file_id
     try:
         sent = await bot.send_document(
             chat_id=STORAGE_CHANNEL_ID,
             document=file_id,
             caption=f"📦 {file_name}"
         )
-        logger.info(f"Файл сохранен в канал, message_id: {sent.message_id}")
+        permanent_file_id = sent.document.file_id
+        logger.info(f"Файл сохранен в канале, вечный file_id получен")
     except Exception as e:
         logger.error(f"Ошибка сохранения в канал: {e}")
-        await message.answer("❌ Не удалось сохранить файл в канал.")
+        await message.answer("❌ Не удалось сохранить файл в канал. Бот админ в канале?")
         return
 
-    # Генерируем хеш
     file_hash = secrets.token_urlsafe(8)
-    
-    # Сохраняем в БД
     caption = message.caption or ""
-    save_file(file_hash, file_id, file_name, caption)
+    save_file(file_hash, permanent_file_id, file_name, caption)
 
-    # Отправляем ссылку админу
     bot_me = await bot.get_me()
     url = f"https://t.me/{bot_me.username}?start={file_hash}"
     
     await message.answer(
-        f"✅ **Файл сохранён!**\n\n"
+        f"✅ **Файл сохранён навечно!**\n\n"
         f"📁 **Название:** {file_name}\n"
         f"📝 **Описание:** {caption if caption else '—'}\n"
-        f"🔗 **Ссылка:**\n`{url}`"
+        f"🔗 **Ссылка:**\n`{url}`\n\n"
+        f"💾 Файл сохранён в канале и будет работать всегда."
     )
 
 # ---------- СПИСОК ФАЙЛОВ ----------
@@ -267,12 +255,9 @@ async def cmd_send(message: types.Message):
             await message.reply_to_message.copy(chat_id=user_id)
             success += 1
         except TelegramForbiddenError:
-            # Пользователь заблокировал бота — можно удалить из базы, если хочешь
             failed += 1
         except TelegramRetryAfter as e:
-            logger.warning(f"FloodWait: {e.retry_after} сек")
             await asyncio.sleep(e.retry_after)
-            # Пробуем еще раз
             try:
                 await message.reply_to_message.copy(chat_id=user_id)
                 success += 1
@@ -285,7 +270,7 @@ async def cmd_send(message: types.Message):
         if i % 10 == 0:
             await status_msg.edit_text(f"⏳ Прогресс: {i}/{len(users)} (✅ {success} | ❌ {failed})")
         
-        await asyncio.sleep(0.05)  # небольшая задержка
+        await asyncio.sleep(0.05)
     
     await status_msg.edit_text(
         f"✅ **Рассылка завершена!**\n\n"
@@ -313,7 +298,7 @@ async def cmd_help(message: types.Message):
 **👑 Админ-команды:**
 
 📁 **Файлы:**
-/addfile - добавить новый файл
+/addfile - добавить новый файл (вечная ссылка)
 /list - список всех файлов
 
 👥 **Пользователи:**
@@ -329,13 +314,13 @@ async def cmd_help(message: types.Message):
 async def main():
     logger.info("🚀 Запуск бота...")
     
-    # Инициализация БД
     init_db()
-    
-    # Удаляем вебхук (на всякий случай)
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Запускаем поллинг
+    logger.info("✅ Бот готов к работе!")
+    logger.info(f"📢 Канал подписки ID: {CHANNEL_ID}")
+    logger.info(f"💾 Канал-хранилище ID: {STORAGE_CHANNEL_ID}")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
