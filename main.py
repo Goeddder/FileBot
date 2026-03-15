@@ -6,7 +6,7 @@ import sys
 import time
 import asyncio
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import UserNotParticipant, FloodWait, MessageIdInvalid
@@ -24,39 +24,54 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAFZImIckEGin220ZJR9WL4abbEU
 ADMIN_ID = 1471307057  
 CHANNEL_URL = "https://t.me/OfficialPlutonium"
 CHANNEL_ID = "@OfficialPlutonium"
-STORAGE_CHANNEL = "@IllyaTelegram"  # Здесь хранятся файлы и база данных
+STORAGE_CHANNEL = "@IllyaTelegram"
 
 DB_PATH = "files.db"
-DB_BACKUP_MSG_ID = None  # ID сообщения с базой в канале
+BACKUP_MSG_ID_FILE = "backup_id.txt"
 
 app = Client("plutonium_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С БАЗОЙ ==========
 
+def get_backup_msg_id():
+    """Читает ID бэкапа из файла"""
+    try:
+        with open(BACKUP_MSG_ID_FILE, "r") as f:
+            return int(f.read().strip())
+    except:
+        return None
+
+def save_backup_msg_id(msg_id):
+    """Сохраняет ID бэкапа в файл"""
+    with open(BACKUP_MSG_ID_FILE, "w") as f:
+        f.write(str(msg_id))
+
 async def download_db_from_channel():
     """Скачивает базу данных из канала"""
-    global DB_BACKUP_MSG_ID
+    backup_id = get_backup_msg_id()
+    if not backup_id:
+        return False
+    
     try:
-        async for msg in app.search_messages(STORAGE_CHANNEL, query="db_backup"):
-            if msg.document and msg.document.file_name == "files.db":
-                DB_BACKUP_MSG_ID = msg.id
-                file = await app.download_media(msg, in_memory=True)
-                with open(DB_PATH, 'wb') as f:
-                    f.write(file.getbuffer())
-                print(f"✅ База данных загружена из канала (ID: {DB_BACKUP_MSG_ID})")
-                return True
+        msg = await app.get_messages(STORAGE_CHANNEL, backup_id)
+        if msg and msg.document and msg.document.file_name == "files.db":
+            file = await app.download_media(msg, in_memory=True)
+            with open(DB_PATH, 'wb') as f:
+                f.write(file.getbuffer())
+            print(f"✅ База загружена из канала (ID: {backup_id})")
+            return True
     except Exception as e:
-        print(f"❌ Ошибка загрузки базы: {e}")
+        print(f"❌ Ошибка загрузки: {e}")
     return False
 
 async def upload_db_to_channel():
     """Сохраняет базу данных в канал"""
-    global DB_BACKUP_MSG_ID
     try:
-        # Удаляем старую версию базы в канале
-        if DB_BACKUP_MSG_ID:
+        # Удаляем старый бэкап если есть
+        old_id = get_backup_msg_id()
+        if old_id:
             try:
-                await app.delete_messages(STORAGE_CHANNEL, DB_BACKUP_MSG_ID)
+                await app.delete_messages(STORAGE_CHANNEL, old_id)
             except:
                 pass
         
@@ -64,19 +79,18 @@ async def upload_db_to_channel():
         msg = await app.send_document(
             STORAGE_CHANNEL, 
             DB_PATH, 
-            caption=f"db_backup {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            caption=f"📦 Бэкап БД {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         )
-        DB_BACKUP_MSG_ID = msg.id
-        print(f"✅ База данных сохранена в канал (ID: {DB_BACKUP_MSG_ID})")
+        save_backup_msg_id(msg.id)
+        print(f"✅ База сохранена в канал (ID: {msg.id})")
         return True
     except Exception as e:
-        print(f"❌ Ошибка сохранения базы: {e}")
+        print(f"❌ Ошибка сохранения: {e}")
         return False
 
 def init_db():
-    """Создает новую базу данных если её нет"""
+    """Создает новую базу данных"""
     conn = sqlite3.connect(DB_PATH)
-    # Таблица файлов
     conn.execute("""
         CREATE TABLE IF NOT EXISTS files (
             hash TEXT PRIMARY KEY, 
@@ -85,7 +99,6 @@ def init_db():
             created_at TEXT
         )
     """)
-    # Таблица пользователей для рассылки
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -93,16 +106,9 @@ def init_db():
             joined_at TEXT
         )
     """)
-    # Таблица настроек
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
     conn.commit()
     conn.close()
-    print("✅ Создана новая база данных")
+    print("✅ Новая база создана")
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
@@ -113,12 +119,11 @@ async def check_subscription(client, user_id):
         return member.status not in ["left", "kicked"]
     except UserNotParticipant:
         return False
-    except Exception as e:
-        print(f"Subscription error: {e}")
-        return True  # Если ошибка, пускаем временно
+    except:
+        return True
 
 def save_user(user_id, username=None):
-    """Сохраняет пользователя в базу"""
+    """Сохраняет пользователя"""
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT OR IGNORE INTO users (user_id, username, joined_at) VALUES (?, ?, ?)",
@@ -127,40 +132,34 @@ def save_user(user_id, username=None):
     conn.commit()
     conn.close()
 
-# ========== ОБРАБОТЧИКИ КОМАНД ==========
+# ========== ОБРАБОТЧИКИ ==========
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     user_id = message.from_user.id
     username = message.from_user.username or f"user_{user_id}"
     
-    # Сохраняем пользователя
     save_user(user_id, username)
 
     sub_button = InlineKeyboardMarkup([[
         InlineKeyboardButton("📢 Канал Plutonium", url=CHANNEL_URL)
     ]])
 
-    # Если просто /start без параметров
     if len(message.command) == 1:
         return await message.reply(
             f"👋 Привет, {message.from_user.first_name}!\n\n"
-            f"Я бот-архив проекта **Plutonium**.\n"
-            f"Файлы хранятся вечно, пользователи сохраняются.",
+            f"Я бот-архив проекта **Plutonium**.",
             reply_markup=sub_button
         )
 
-    # Если пришли по ссылке с хешем
     file_hash = message.command[1]
     
-    # Проверяем подписку
     if not await check_subscription(client, user_id):
         return await message.reply(
             "⚠️ **Доступ закрыт!**\nСначала подпишись на канал.",
             reply_markup=sub_button
         )
 
-    # Ищем файл в базе
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT remote_msg_id, name FROM files WHERE hash = ?", (file_hash,)).fetchone()
     conn.close()
@@ -176,21 +175,19 @@ async def start_handler(client, message):
                 reply_markup=sub_button
             )
         except MessageIdInvalid:
-            await message.reply("❌ Файл не найден в хранилище. Сообщи админу.")
+            await message.reply("❌ Файл не найден в хранилище")
     else:
-        await message.reply("❌ Ссылка недействительна.")
+        await message.reply("❌ Ссылка недействительна")
 
-# ========== ЗАГРУЗКА ФАЙЛОВ (АДМИН) ==========
+# ========== ЗАГРУЗКА ФАЙЛОВ ==========
 
 @app.on_message((filters.document | filters.video | filters.photo) & filters.user(ADMIN_ID))
 async def admin_upload(client, message):
     # Отправляем файл в канал-хранилище
     sent_msg = await message.copy(chat_id=STORAGE_CHANNEL)
     
-    # Генерируем уникальный хеш
     f_hash = secrets.token_urlsafe(8)
     
-    # Определяем имя файла
     if message.document:
         name = message.document.file_name or "Документ"
     elif message.video:
@@ -198,7 +195,6 @@ async def admin_upload(client, message):
     else:
         name = message.caption or "Фото"
 
-    # Сохраняем в базу
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO files (hash, remote_msg_id, name, created_at) VALUES (?, ?, ?, ?)",
@@ -207,17 +203,16 @@ async def admin_upload(client, message):
     conn.commit()
     conn.close()
 
-    # Создаем ссылку
     bot_username = (await client.get_me()).username
     url = f"https://t.me/{bot_username}?start={f_hash}"
     
     await message.reply(
-        f"💎 **Файл сохранен навсегда!**\n\n"
+        f"💎 **Файл сохранен!**\n\n"
         f"📁 **Название:** {name}\n"
         f"🔗 **Ссылка:**\n`{url}`"
     )
     
-    # Сохраняем базу в канал (бэкап)
+    # Сохраняем базу в канал
     await upload_db_to_channel()
 
 # ========== АДМИН-КОМАНДЫ ==========
@@ -250,7 +245,6 @@ async def users_stats(client, message):
     conn = sqlite3.connect(DB_PATH)
     total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     
-    # За последние 24 часа
     yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
     new_today = conn.execute(
         "SELECT COUNT(*) FROM users WHERE joined_at > ?",
@@ -289,8 +283,8 @@ async def broadcast(client, message):
             await asyncio.sleep(0.05)
         except FloodWait as e:
             await asyncio.sleep(e.value)
-        except Exception as e:
-            print(f"Ошибка отправки {uid}: {e}")
+        except:
+            pass
     
     await status.edit_text(
         f"✅ **Рассылка завершена!**\n\n"
@@ -310,7 +304,7 @@ async def manual_restore(client, message):
     if await download_db_from_channel():
         await message.reply("✅ База данных восстановлена из канала!")
     else:
-        await message.reply("❌ Не удалось найти бэкап в канале.")
+        await message.reply("❌ Не найдено бэкапа. Сначала сделай /backup")
 
 @app.on_message(filters.command("help") & filters.user(ADMIN_ID))
 async def help_cmd(client, message):
@@ -328,8 +322,6 @@ async def help_cmd(client, message):
 
 ℹ️ **Другое:**
 /help - это сообщение
-
-💡 **Важно:** База авто-сохраняется при добавлении файла
 """
     await message.reply(help_text)
 
@@ -338,17 +330,16 @@ async def help_cmd(client, message):
 async def main():
     print("🚀 Запуск бота...")
     
-    # Запускаем клиента
     await app.start()
     print("✅ Клиент Telegram запущен")
     
-    # Пробуем загрузить базу из канала
+    # Пробуем загрузить базу
     if await download_db_from_channel():
-        print("✅ База данных загружена из канала")
+        print("✅ База загружена из канала")
     else:
         init_db()
-        # Сохраняем новую базу в канал
         await upload_db_to_channel()
+        print("✅ Создана новая база")
     
     print("\n" + "="*40)
     print("🤖 Бот успешно запущен!")
@@ -356,10 +347,7 @@ async def main():
     print(f"💾 Канал-хранилище: {STORAGE_CHANNEL}")
     print("="*40 + "\n")
     
-    # Держим бота запущенным
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    # Для совместимости с datetime
-    from datetime import datetime, timedelta
     asyncio.run(main())
