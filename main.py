@@ -2,10 +2,15 @@ import os
 import sqlite3
 import secrets
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import UserNotParticipant, FloodWait, MessageIdInvalid
+
+# Логирование
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ========== НАСТРОЙКИ ==========
 API_ID = 39522849
@@ -14,18 +19,24 @@ BOT_TOKEN = "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw"
 ADMIN_ID = 1471307057  
 CHANNEL_URL = "https://t.me/OfficialPlutonium"
 CHANNEL_ID = "@OfficialPlutonium"
-STORAGE_CHANNEL = "@IllyaTelegram"  # бот должен быть админом
+STORAGE_CHANNEL = "@IllyaTelegram"
 # ================================
 
-app = Client("plutonium_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# ВАЖНО: используем имя сессии, которое точно запишется
+app = Client(
+    "plutonium_bot_session",
+    api_id=API_ID, 
+    api_hash=API_HASH, 
+    bot_token=BOT_TOKEN,
+    in_memory=False  # сессия сохранится на диск
+)
 
 # ---------- БАЗА ДАННЫХ ----------
 DB_PATH = "files.db"
-BACKUP_ID_FILE = "backup_msg_id.txt"
+BACKUP_ID_FILE = "backup_id.txt"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    # Таблица файлов
     conn.execute("""
         CREATE TABLE IF NOT EXISTS files (
             hash TEXT PRIMARY KEY,
@@ -34,7 +45,6 @@ def init_db():
             added_at TEXT
         )
     """)
-    # Таблица пользователей (для рассылки)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -44,14 +54,17 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-    print("✅ База данных готова")
+    logger.info("✅ База данных готова")
 
 def save_user(user_id, username):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT OR IGNORE INTO users (user_id, username, joined_at) VALUES (?, ?, ?)",
-                (user_id, username, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("INSERT OR IGNORE INTO users (user_id, username, joined_at) VALUES (?, ?, ?)",
+                    (user_id, username, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения пользователя: {e}")
 
 def save_file(hash, msg_id, name):
     conn = sqlite3.connect(DB_PATH)
@@ -99,15 +112,14 @@ async def restore_db_from_channel():
         msg = await app.get_messages(STORAGE_CHANNEL, backup_id)
         if msg and msg.document:
             await app.download_media(msg, file_name=DB_PATH)
-            print("✅ База восстановлена из канала")
+            logger.info("✅ База восстановлена из канала")
             return True
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Ошибка восстановления: {e}")
     return False
 
 async def backup_db_to_channel():
     try:
-        # Удаляем старый бэкап
         old_id = load_backup_id()
         if old_id:
             try:
@@ -115,14 +127,13 @@ async def backup_db_to_channel():
             except:
                 pass
         
-        # Отправляем новый
         msg = await app.send_document(STORAGE_CHANNEL, DB_PATH, 
                                      caption=f"🔄 Бэкап БД {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         save_backup_id(msg.id)
-        print("✅ База сохранена в канал")
+        logger.info("✅ База сохранена в канал")
         return True
     except Exception as e:
-        print(f"❌ Ошибка бэкапа: {e}")
+        logger.error(f"❌ Ошибка бэкапа: {e}")
         return False
 
 # ---------- ПРОВЕРКА ПОДПИСКИ ----------
@@ -132,8 +143,9 @@ async def check_sub(client, user_id):
         return member.status not in ["left", "kicked"]
     except UserNotParticipant:
         return False
-    except:
-        return True
+    except Exception as e:
+        logger.error(f"Ошибка проверки подписки: {e}")
+        return True  # временно пускаем
 
 # ---------- КОМАНДА СТАРТ ----------
 @app.on_message(filters.command("start") & filters.private)
@@ -141,12 +153,12 @@ async def start_cmd(client, message):
     user_id = message.from_user.id
     username = message.from_user.username or f"user_{user_id}"
     save_user(user_id, username)
+    logger.info(f"Пользователь {user_id} запустил бота")
 
     sub_button = InlineKeyboardMarkup([[
         InlineKeyboardButton("📢 Канал Plutonium", url=CHANNEL_URL)
     ]])
 
-    # Если просто /start
     if len(message.command) == 1:
         await message.reply(
             f"👋 Привет, {message.from_user.first_name}!\n\n"
@@ -155,7 +167,6 @@ async def start_cmd(client, message):
         )
         return
 
-    # Если пришли по ссылке
     file_hash = message.command[1]
     
     if not await check_sub(client, user_id):
@@ -186,7 +197,6 @@ async def addfile_cmd(client, message):
 
 @app.on_message((filters.document | filters.video | filters.photo) & filters.user(ADMIN_ID))
 async def handle_file(client, message):
-    # Определяем имя
     if message.document:
         name = message.caption or message.document.file_name or "Документ"
     elif message.video:
@@ -194,25 +204,20 @@ async def handle_file(client, message):
     else:
         name = message.caption or "Фото"
 
-    # Сохраняем в канал
     sent = await message.copy(chat_id=STORAGE_CHANNEL)
     
-    # Генерируем хеш и сохраняем в базу
     file_hash = secrets.token_urlsafe(8)
     save_file(file_hash, sent.id, name)
 
-    # Делаем бэкап базы
     await backup_db_to_channel()
 
-    # Ссылка для скачивания
     bot_me = await client.get_me()
     url = f"https://t.me/{bot_me.username}?start={file_hash}"
     
     await message.reply(
         f"✅ **Файл сохранён!**\n\n"
         f"📁 {name}\n"
-        f"🔗 `{url}`\n\n"
-        f"💾 База данных сохранена в канал.",
+        f"🔗 `{url}`",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("📢 Канал с файлами", url=f"https://t.me/{STORAGE_CHANNEL[1:]}")
         ]])
@@ -262,8 +267,8 @@ async def send_cmd(client, message):
             await asyncio.sleep(0.05)
         except FloodWait as e:
             await asyncio.sleep(e.value)
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Ошибка отправки {uid}: {e}")
 
     await status.edit_text(f"✅ Рассылка завершена!\n✅ {success} / ❌ {len(users)-success}")
 
@@ -314,12 +319,26 @@ async def restore_cmd(client, message):
 # ---------- ЗАПУСК ----------
 async def main():
     print("🚀 Запуск бота...")
-    await app.start()
+    
+    # Добавляем обработчик реконнекта
+    while True:
+        try:
+            await app.start()
+            break
+        except FloodWait as e:
+            wait_time = e.value
+            print(f"⏳ Flood wait: {wait_time} секунд")
+            await asyncio.sleep(wait_time)
+    
     print("✅ Клиент запущен")
     
-    # Пытаемся восстановить базу
+    # Проверяем, что бот видит команды
+    me = await app.get_me()
+    print(f"✅ Бот: @{me.username}")
+    
+    # Восстанавливаем базу
     if await restore_db_from_channel():
-        print("✅ База восстановлена")
+        print("✅ База восстановлена из канала")
     else:
         init_db()
         print("✅ Создана новая база")
@@ -327,7 +346,9 @@ async def main():
     print(f"📢 Канал подписки: {CHANNEL_ID}")
     print(f"💾 Канал-хранилище: {STORAGE_CHANNEL}")
     print("="*40)
+    print("🤖 Бот готов к работе!")
     
+    # Держим бота запущенным
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
