@@ -16,8 +16,8 @@ import os
 TOKEN = "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw"
 ADMIN_ID = 1471307057
 CHANNEL_URL = "https://t.me/OfficialPlutonium"
-CHANNEL_ID = -1001234567890  # @OfficialPlutonium (ЗАМЕНИ НА РЕАЛЬНЫЙ ID)
-STORAGE_CHANNEL_ID = -1001234567890  # @IllyaTelegram (ЗАМЕНИ НА РЕАЛЬНЫЙ ID)
+CHANNEL_ID = -1003607014773  # @OfficialPlutonium (ЗАМЕНИ НА РЕАЛЬНЫЙ ID)
+STORAGE_CHANNEL_ID = -1003677537552  # @IllyaTelegram (ЗАМЕНИ НА РЕАЛЬНЫЙ ID)
 # ================================
 
 logging.basicConfig(level=logging.INFO)
