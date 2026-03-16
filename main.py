@@ -27,10 +27,11 @@ dp = Dispatcher()
 # ---------- БАЗА ДАННЫХ ----------
 def init_db():
     conn = sqlite3.connect('files.db')
+    # ВАЖНО: храним message_id из канала, а не file_id
     conn.execute("""
         CREATE TABLE IF NOT EXISTS files (
             hash TEXT PRIMARY KEY,
-            file_id TEXT,
+            message_id INTEGER,
             file_name TEXT,
             caption TEXT,
             added_at TEXT
@@ -57,19 +58,19 @@ def save_user(user_id, username, first_name):
     conn.commit()
     conn.close()
 
-def save_file(file_hash, file_id, file_name, caption):
+def save_file(file_hash, message_id, file_name, caption):
     conn = sqlite3.connect('files.db')
     conn.execute(
-        "INSERT INTO files (hash, file_id, file_name, caption, added_at) VALUES (?, ?, ?, ?, ?)",
-        (file_hash, file_id, file_name, caption, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        "INSERT INTO files (hash, message_id, file_name, caption, added_at) VALUES (?, ?, ?, ?, ?)",
+        (file_hash, message_id, file_name, caption, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     )
     conn.commit()
     conn.close()
-    logger.info(f"✅ Файл {file_hash} сохранен в БД")
+    logger.info(f"✅ Файл {file_hash} сохранен в БД (message_id: {message_id})")
 
 def get_file(file_hash):
     conn = sqlite3.connect('files.db')
-    row = conn.execute("SELECT file_id, file_name, caption FROM files WHERE hash = ?", (file_hash,)).fetchone()
+    row = conn.execute("SELECT message_id, file_name, caption FROM files WHERE hash = ?", (file_hash,)).fetchone()
     conn.close()
     return row
 
@@ -132,19 +133,21 @@ async def cmd_start(message: types.Message):
             await message.answer("❌ Файл не найден или ссылка недействительна.")
             return
 
-        file_id, file_name, caption = file_info
+        message_id, file_name, caption = file_info
         
         try:
-            await bot.send_document(
+            # Пересылаем сообщение ИЗ КАНАЛА пользователю
+            await bot.copy_message(
                 chat_id=message.chat.id,
-                document=file_id,
+                from_chat_id=STORAGE_CHANNEL_ID,
+                message_id=message_id,
                 caption=f"📁 **{file_name}**\n\n{caption if caption else ''}",
                 reply_markup=sub_button
             )
-            logger.info(f"Файл {file_hash} отправлен пользователю {user_id}")
+            logger.info(f"Файл {file_hash} (msg:{message_id}) отправлен пользователю {user_id}")
         except Exception as e:
             logger.error(f"Ошибка отправки файла: {e}")
-            await message.answer("❌ Ошибка при отправке файла.")
+            await message.answer("❌ Ошибка при отправке файла. Сообщи админу.")
 
 # ---------- ДОБАВЛЕНИЕ ФАЙЛА ----------
 @dp.message(Command("addfile"))
@@ -164,24 +167,22 @@ async def handle_file(message: types.Message):
         return
 
     if message.document:
-        file_id = message.document.file_id
         file_name = message.document.file_name or "документ"
     elif message.video:
-        file_id = message.video.file_id
         file_name = message.video.file_name or "видео"
     else:
-        file_id = message.photo[-1].file_id
         file_name = "фото"
 
-    # Пересылаем в канал для вечного file_id
+    # Отправляем в канал-хранилище
     try:
         sent = await bot.send_document(
             chat_id=STORAGE_CHANNEL_ID,
-            document=file_id,
+            document=message.document or message.video or message.photo[-1].file_id,
             caption=f"📦 {file_name}"
         )
-        permanent_file_id = sent.document.file_id
-        logger.info(f"Файл сохранен в канале, вечный file_id получен")
+        # Сохраняем message_id из канала
+        message_id = sent.message_id
+        logger.info(f"Файл сохранен в канале, message_id: {message_id}")
     except Exception as e:
         logger.error(f"Ошибка сохранения в канал: {e}")
         await message.answer("❌ Не удалось сохранить файл в канал. Бот админ в канале?")
@@ -189,7 +190,7 @@ async def handle_file(message: types.Message):
 
     file_hash = secrets.token_urlsafe(8)
     caption = message.caption or ""
-    save_file(file_hash, permanent_file_id, file_name, caption)
+    save_file(file_hash, message_id, file_name, caption)
 
     bot_me = await bot.get_me()
     url = f"https://t.me/{bot_me.username}?start={file_hash}"
@@ -199,7 +200,7 @@ async def handle_file(message: types.Message):
         f"📁 **Название:** {file_name}\n"
         f"📝 **Описание:** {caption if caption else '—'}\n"
         f"🔗 **Ссылка:**\n`{url}`\n\n"
-        f"💾 Файл сохранён в канале и будет работать всегда."
+        f"💾 Файл сохранён в канале (ID: {message_id}) и будет работать всегда."
     )
 
 # ---------- СПИСОК ФАЙЛОВ ----------
