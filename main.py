@@ -15,13 +15,14 @@ ADMIN_ID = 1471307057
 CHANNEL_URL = "https://t.me/OfficialPlutonium"
 # ================================
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, 
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# ---------- ПРОСТАЯ БАЗА ----------
+# ---------- БАЗА ----------
 def init_db():
     conn = sqlite3.connect('files.db')
     conn.execute("""
@@ -72,45 +73,67 @@ def get_all_users():
     conn.close()
     return rows
 
-# ---------- КОМАНДА СТАРТ ----------
+# ---------- КОМАНДА СТАРТ (С ЛОГАМИ) ----------
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
     save_user(user_id)
     
+    # Логируем ВСЁ, что пришло
+    logger.info(f"🔥 ПОЛУЧЕН START от {user_id}")
+    logger.info(f"📝 Полный текст: {message.text}")
+    logger.info(f"📝 Разбивка: {message.text.split()}")
+    
     channel_btn = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Канал Plutonium", url=CHANNEL_URL)]
     ])
 
-    if len(message.text.split()) == 1:
+    # Разбираем параметры
+    parts = message.text.split()
+    
+    # Если просто /start без параметров
+    if len(parts) == 1:
         await message.answer(
             f"👋 Привет, {message.from_user.first_name}!\n\n"
-            f"Я бот Plutonium. Перейди по ссылке, чтобы получить файл.",
+            f"Я бот Plutonium. Перейди по ссылке, чтобы получить файл.\n\n"
+            f"📊 Статистика:\n"
+            f"👥 Пользователей: {len(get_all_users())}\n"
+            f"📁 Файлов: {len(get_all_files())}",
             reply_markup=channel_btn
         )
         return
 
-    file_hash = message.text.split()[1]
+    # Если есть параметр (наш хеш)
+    file_hash = parts[1]
+    logger.info(f"🔍 Ищем файл с хешем: {file_hash}")
+    
     file_info = get_file(file_hash)
     
     if not file_info:
-        await message.answer("❌ Файл не найден")
+        logger.warning(f"❌ Файл с хешем {file_hash} НЕ НАЙДЕН в базе")
+        await message.answer("❌ Файл не найден. Возможно, ссылка устарела.")
         return
     
     file_id, file_name, caption = file_info
+    logger.info(f"✅ Файл НАЙДЕН: {file_name}")
     
-    if caption:
-        await message.answer_document(
-            document=file_id,
-            caption=f"📁 **{file_name}**\n\n{caption}",
-            reply_markup=channel_btn
-        )
-    else:
-        await message.answer_document(
-            document=file_id,
-            caption=f"📁 **{file_name}**",
-            reply_markup=channel_btn
-        )
+    try:
+        if caption:
+            await message.answer_document(
+                document=file_id,
+                caption=f"📁 **{file_name}**\n\n{caption}",
+                reply_markup=channel_btn
+            )
+        else:
+            await message.answer_document(
+                document=file_id,
+                caption=f"📁 **{file_name}**",
+                reply_markup=channel_btn
+            )
+        logger.info(f"✅ Файл {file_name} успешно отправлен")
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки файла: {e}")
+        await message.answer("❌ Ошибка при отправке файла. Сообщи админу.")
 
 # ---------- ДОБАВЛЕНИЕ ФАЙЛА ----------
 @dp.message(Command("addfile"))
@@ -152,7 +175,8 @@ async def get_file_from_admin(message: types.Message):
     await message.answer(
         f"✅ **Файл сохранён!**\n\n"
         f"📁 **{file_name}**\n"
-        f"🔗 `{url}`"
+        f"🔗 `{url}`\n\n"
+        f"💾 Бэкап базы отправлен в личку"
     )
 
 # ---------- ВОССТАНОВЛЕНИЕ БАЗЫ ----------
@@ -251,6 +275,7 @@ async def main():
     init_db()
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("✅ Бот готов!")
+    logger.info(f"📊 В базе: {len(get_all_files())} файлов, {len(get_all_users())} пользователей")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
