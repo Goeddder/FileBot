@@ -27,7 +27,6 @@ dp = Dispatcher()
 # ---------- БАЗА ДАННЫХ ----------
 def init_db():
     conn = sqlite3.connect('files.db')
-    # ВАЖНО: храним message_id из канала, а не file_id
     conn.execute("""
         CREATE TABLE IF NOT EXISTS files (
             hash TEXT PRIMARY KEY,
@@ -136,7 +135,6 @@ async def cmd_start(message: types.Message):
         message_id, file_name, caption = file_info
         
         try:
-            # Пересылаем сообщение ИЗ КАНАЛА пользователю
             await bot.copy_message(
                 chat_id=message.chat.id,
                 from_chat_id=STORAGE_CHANNEL_ID,
@@ -166,26 +164,39 @@ async def handle_file(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    if message.document:
-        file_name = message.document.file_name or "документ"
-    elif message.video:
-        file_name = message.video.file_name or "видео"
-    else:
-        file_name = "фото"
-
-    # Отправляем в канал-хранилище
+    # Определяем тип файла и готовим к отправке в канал
     try:
-        sent = await bot.send_document(
-            chat_id=STORAGE_CHANNEL_ID,
-            document=message.document or message.video or message.photo[-1].file_id,
-            caption=f"📦 {file_name}"
-        )
-        # Сохраняем message_id из канала
+        if message.document:
+            file_name = message.document.file_name or "документ"
+            # Отправляем документ
+            sent = await bot.send_document(
+                chat_id=STORAGE_CHANNEL_ID,
+                document=message.document.file_id,
+                caption=f"📦 {file_name}"
+            )
+        elif message.video:
+            file_name = message.video.file_name or "видео"
+            # Отправляем видео
+            sent = await bot.send_video(
+                chat_id=STORAGE_CHANNEL_ID,
+                video=message.video.file_id,
+                caption=f"📦 {file_name}"
+            )
+        else:  # фото
+            file_name = "фото"
+            # Отправляем фото
+            sent = await bot.send_photo(
+                chat_id=STORAGE_CHANNEL_ID,
+                photo=message.photo[-1].file_id,
+                caption=f"📦 {file_name}"
+            )
+        
         message_id = sent.message_id
         logger.info(f"Файл сохранен в канале, message_id: {message_id}")
+        
     except Exception as e:
         logger.error(f"Ошибка сохранения в канал: {e}")
-        await message.answer("❌ Не удалось сохранить файл в канал. Бот админ в канале?")
+        await message.answer(f"❌ Не удалось сохранить файл в канал. Ошибка: {str(e)[:100]}")
         return
 
     file_hash = secrets.token_urlsafe(8)
