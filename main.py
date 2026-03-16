@@ -1,210 +1,154 @@
-import asyncio
+import os
 import sqlite3
 import secrets
-import logging
-from datetime import datetime
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
+import subprocess
+import sys
+import time
+import asyncio
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.errors import UserNotParticipant, FloodWait
 
-# ========== ТВОИ ДАННЫЕ ==========
-TOKEN = "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw"
-ADMIN_ID = 1471307057
+# 1. АВТО-УСТАНОВКА БИБЛИОТЕК
+try:
+    import pyrogram
+except ImportError:
+    subprocess.call([sys.executable, "-m", "pip", "install", "pyrogram", "tgcrypto"])
+
+# 2. НАСТРОЙКИ
+API_ID = int(os.environ.get("API_ID", 39522849))
+API_HASH = os.environ.get("API_HASH", "26909eddad0be2400fb765fad0e267f8")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw")
+ADMIN_ID = 1471307057  
 CHANNEL_URL = "https://t.me/OfficialPlutonium"
-# ================================
+CHANNEL_ID = "@OfficialPlutonium" 
+STORAGE_CHANNEL = "@IllyaTelegram" 
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+DB_PATH = "files.db"
 
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
+app = Client("plutonium_final", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# ---------- ТВОЯ БАЗА (КАК БЫЛО) ----------
+# Состояние для восстановления базы
+waiting_for_backup = {}
+
 def init_db():
-    conn = sqlite3.connect('files.db')
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS files (
-            hash TEXT PRIMARY KEY,
-            file_id TEXT,
-            file_name TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY
-        )
-    """)
-    conn.commit()
-    conn.close()
-    logger.info("✅ База готова")
-
-def save_user(user_id):
-    conn = sqlite3.connect('files.db')
-    conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("CREATE TABLE IF NOT EXISTS files (hash TEXT PRIMARY KEY, remote_msg_id INTEGER, type TEXT, name TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
     conn.commit()
     conn.close()
 
-def save_file(file_hash, file_id, file_name):
-    conn = sqlite3.connect('files.db')
-    conn.execute("INSERT INTO files (hash, file_id, file_name) VALUES (?, ?, ?)",
-                (file_hash, file_id, file_name))
-    conn.commit()
-    conn.close()
+async def check_subscription(client, user_id):
+    try:
+        await client.get_chat_member(CHANNEL_ID, user_id)
+        return True
+    except UserNotParticipant: return False
+    except: return True
 
-def get_file(file_hash):
-    conn = sqlite3.connect('files.db')
-    row = conn.execute("SELECT file_id, file_name FROM files WHERE hash = ?", (file_hash,)).fetchone()
-    conn.close()
-    return row
+# --- ОБРАБОТЧИКИ ---
 
-def get_all_files():
-    conn = sqlite3.connect('files.db')
-    rows = conn.execute("SELECT hash, file_name FROM files").fetchall()
-    conn.close()
-    return rows
-
-def get_all_users():
-    conn = sqlite3.connect('files.db')
-    rows = conn.execute("SELECT user_id FROM users").fetchall()
-    conn.close()
-    return rows
-
-# ---------- ТВОЙ СТАРТ ----------
-@dp.message(Command("start"))
-async def start_cmd(message: types.Message):
+@app.on_message(filters.command("start") & filters.private)
+async def start_handler(client, message):
     user_id = message.from_user.id
-    save_user(user_id)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT OR IGNORE INTO users VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
 
-    channel_btn = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Канал Plutonium", url=CHANNEL_URL)]
-    ])
+    sub_button = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Подписаться на Plutonium", url=CHANNEL_URL)]])
 
-    if len(message.text.split()) == 1:
-        await message.answer(
-            f"👋 Привет, {message.from_user.first_name}!\n\nЯ бот Plutonium.",
-            reply_markup=channel_btn
-        )
-        return
+    if len(message.command) == 1:
+        return await message.reply(f"👋 Привет! Я архив проекта Plutonium. Подпишись, чтобы скачивать файлы.", reply_markup=sub_button)
 
-    file_hash = message.text.split()[1]
-    file_info = get_file(file_hash)
+    file_hash = message.command[1]
+    if not await check_subscription(client, user_id):
+        return await message.reply("⚠️ **Доступ закрыт!**\nСначала подпишись на канал.", reply_markup=sub_button)
 
-    if not file_info:
-        await message.answer("❌ Файл не найден")
-        return
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT remote_msg_id, type FROM files WHERE hash = ?", (file_hash,)).fetchone()
+    conn.close()
 
-    file_id, file_name = file_info
-    await message.answer_document(
-        document=file_id,
-        caption=f"📁 {file_name}",
-        reply_markup=channel_btn
-    )
-
-# ---------- ТВОЕ ДОБАВЛЕНИЕ ФАЙЛА + БЭКАП ----------
-@dp.message(Command("addfile"))
-async def addfile_cmd(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("📤 Отправь мне файл")
-
-@dp.message(F.document)
-async def get_file_from_admin(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    file_id = message.document.file_id
-    file_name = message.document.file_name or "файл"
-
-    file_hash = secrets.token_urlsafe(8)
-    save_file(file_hash, file_id, file_name)
-
-    # ---------- БЭКАП ТЕБЕ В ЛИЧКУ ----------
-    with open('files.db', 'rb') as f:
-        await bot.send_document(
-            chat_id=ADMIN_ID,
-            document=FSInputFile('files.db'),
-            caption=f"📦 Бэкап после добавления {file_name}"
-        )
-
-    bot_me = await bot.get_me()
-    url = f"https://t.me/{bot_me.username}?start={file_hash}"
-    await message.answer(f"✅ Файл сохранён!\n🔗 {url}")
-
-# ---------- ВОССТАНОВЛЕНИЕ ----------
-@dp.message(Command("restore"))
-async def restore_cmd(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("📤 Отправь мне файл files.db")
-
-@dp.message(F.document)
-async def handle_restore(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    if message.document.file_name != "files.db":
-        await message.answer("❌ Нужен файл files.db")
-        return
-
-    file = await bot.download_file(message.document.file_id)
-    with open('files.db', 'wb') as f:
-        f.write(file.getbuffer())
-
-    await message.answer("✅ База восстановлена!")
-
-# ---------- ТВОЙ ЛИСТ ----------
-@dp.message(Command("list"))
-async def list_cmd(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    files = get_all_files()
-    if not files:
-        await message.answer("📭 Нет файлов")
-        return
-
-    bot_me = await bot.get_me()
-    text = "📂 Файлы:\n\n"
-    for h, name in files:
-        text += f"📁 {name}\nhttps://t.me/{bot_me.username}?start={h}\n\n"
-
-    await message.answer(text)
-
-# ---------- ТВОЯ РАССЫЛКА ----------
-@dp.message(Command("send"))
-async def send_cmd(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    if not message.reply_to_message:
-        await message.answer("❌ Ответь на сообщение")
-        return
-
-    users = get_all_users()
-    if not users:
-        await message.answer("📭 Нет пользователей")
-        return
-
-    status = await message.answer(f"📢 Рассылка {len(users)} пользователям...")
-    success = 0
-    for uid in users:
+    if row:
+        msg_id, f_type = row
         try:
-            await message.reply_to_message.copy(uid[0])
-            success += 1
-            if success % 10 == 0:
-                await status.edit_text(f"⏳ Прогресс: {success}/{len(users)}")
-            await asyncio.sleep(0.05)
+            await client.copy_message(chat_id=message.chat.id, from_chat_id=STORAGE_CHANNEL, message_id=msg_id, reply_markup=sub_button)
         except:
-            pass
+            await message.reply("❌ Ошибка доступа к хранилищу.")
 
-    await status.edit_text(f"✅ Разослано: {success}/{len(users)}")
+# КОМАНДА ВОССТАНОВЛЕНИЯ
+@app.on_message(filters.command("restore") & filters.user(ADMIN_ID))
+async def restore_request(client, message):
+    waiting_for_backup[message.from_user.id] = True
+    await message.reply("📤 Отправь мне файл `files.db`, чтобы восстановить базу данных.")
 
-# ---------- ТВОЙ ЗАПУСК ----------
-async def main():
-    init_db()
-    await bot.delete_webhook()
-    logger.info("✅ Бот запущен!")
-    await dp.start_polling(bot)
+# ОБРАБОТКА ФАЙЛА БЭКАПА
+@app.on_message(filters.document & filters.user(ADMIN_ID))
+async def handle_restore(client, message):
+    if message.from_user.id in waiting_for_backup:
+        if message.document.file_name == "files.db":
+            status = await message.reply("⏳ Восстановление базы...")
+            try:
+                # Скачиваем новый файл поверх старого
+                await message.download(file_name=DB_PATH)
+                del waiting_for_backup[message.from_user.id]
+                await status.edit_text("✅ База данных успешно восстановлена! Теперь старые ссылки снова работают.")
+            except Exception as e:
+                await status.edit_text(f"❌ Ошибка при восстановлении: {e}")
+        else:
+            await message.reply("⚠️ Пожалуйста, отправь файл с названием `files.db`.")
+        return
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # Если это не восстановление, а обычная загрузка админом
+    sent_msg = await message.copy(chat_id=STORAGE_CHANNEL)
+    f_hash = secrets.token_urlsafe(8)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT INTO files VALUES (?, ?, ?, ?)", (f_hash, sent_msg.id, "file", message.caption or "Файл"))
+    conn.commit()
+    conn.close()
+    await message.reply(f"💎 Сохранено!\nСсылка: `https://t.me/plutoniumfilesBot?start={f_hash}`")
+    try: await message.reply_document(DB_PATH, caption="📦 Бэкап базы")
+    except: pass
+
+@app.on_message((filters.video | filters.photo) & filters.user(ADMIN_ID))
+async def admin_media_upload(client, message):
+    sent_msg = await message.copy(chat_id=STORAGE_CHANNEL)
+    f_hash = secrets.token_urlsafe(8)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT INTO files VALUES (?, ?, ?, ?)", (f_hash, sent_msg.id, "media", message.caption or "Медиа"))
+    conn.commit()
+    conn.close()
+    await message.reply(f"💎 Сохранено!\nСсылка: `https://t.me/plutoniumfilesBot?start={f_hash}`")
+    try: await message.reply_document(DB_PATH, caption="📦 Бэкап базы")
+    except: pass
+
+@app.on_message(filters.command("list") & filters.user(ADMIN_ID))
+async def list_files(client, message):
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT hash, name FROM files").fetchall()
+    conn.close()
+    if not rows: return await message.reply("Пусто.")
+    res = "📂 **Список:**\n\n" + "\n".join([f"• {n}\n`https://t.me/plutoniumfilesBot?start={h}`" for h, n in rows])
+    await message.reply(res)
+
+@app.on_message(filters.command("send") & filters.user(ADMIN_ID))
+async def broadcast(client, message):
+    if not message.reply_to_message:
+        return await message.reply("Ответь на сообщение командой `/send`.")
+    conn = sqlite3.connect(DB_PATH)
+    users = conn.execute("SELECT user_id FROM users").fetchall()
+    conn.close()
+    count = 0
+    status = await message.reply(f"🚀 Рассылка {len(users)} чел...")
+    for (uid,) in users:
+        try:
+            await message.reply_to_message.copy(uid)
+            count += 1
+            if count % 15 == 0: await status.edit_text(f"Прогресс: {count}/{len(users)}")
+            await asyncio.sleep(0.05)
+        except FloodWait as e: await asyncio.sleep(e.value)
+        except: pass
+    await status.edit_text(f"✅ Готово! Получили {count} чел.")
+
+init_db()
+app.run()
+    
