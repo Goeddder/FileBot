@@ -139,7 +139,7 @@ def save_user(user_id, username, first_name, last_name, is_premium, inviter_id=N
     )
     if inviter_id and inviter_id != user_id:
         conn.execute("UPDATE users SET total_invites = total_invites + 1 WHERE user_id = ?", (inviter_id,))
-        conn.execute("INSERT INTO invites (inviter_id, invited_id) VALUES (?, ?)", (inviter_id, user_id))
+        conn.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (inviter_id, user_id))
     conn.commit()
 
 def get_user(user_id):
@@ -188,17 +188,16 @@ def get_all_files():
 waiting_for_file = {}
 waiting_for_broadcast = {}
 
-# --- КЛАВИАТУРЫ (ПРЯМЫЕ JSON, КАК В ПРИМЕРЕ) ---
+# --- КЛАВИАТУРЫ С ПРЯМЫМИ ID ЭМОДЗИ ---
 def main_keyboard(is_premium=False):
     if is_premium:
         return {
             "keyboard": [
-                [{"text": f"<tg-emoji emoji-id=\"5875008416132370818\">📁</tg-emoji> Игры"}],
-                [{"text": f"<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Профиль"}, {"text": "🔗 Рефералка"}],
+                [{"text": "<tg-emoji emoji-id=\"5875008416132370818\">📁</tg-emoji> Игры", "parse_mode": "HTML"}],
+                [{"text": "<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Профиль", "parse_mode": "HTML"}, {"text": "🔗 Рефералка"}],
                 [{"text": "❓ Помощь"}]
             ],
-            "resize_keyboard": True,
-            "parse_mode": "HTML"
+            "resize_keyboard": True
         }
     else:
         return {
@@ -222,7 +221,6 @@ def admin_keyboard(is_premium=False):
     }
 
 def subscribe_keyboard(is_premium=False):
-    """Инлайн кнопки как в примере"""
     if is_premium:
         return {
             "inline_keyboard": [
@@ -261,11 +259,14 @@ def cheats_keyboard(cheats, game, is_premium=False):
 
 def file_footer(is_premium=False):
     if is_premium:
-        return f"\n\n<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> **Ваш Файл**\n<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> **Buy plutonium** - @PlutoniumllcBot"
+        return (
+            f"\n\n<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> **Ваш Файл**\n"
+            f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> **Buy plutonium** - @PlutoniumllcBot"
+        )
     else:
-        return f"\n\n📤 **Ваш Файл**\n🏪 **Buy plutonium** - @PlutoniumllcBot"
+        return "\n\n📤 **Ваш Файл**\n🏪 **Buy plutonium** - @PlutoniumllcBot"
 
-# --- ОБРАБОТКА ---
+# --- ОБРАБОТКА СООБЩЕНИЙ ---
 def process_message(chat_id, user_id, text, username, first_name, last_name, is_premium, message_id):
     try:
         # Рассылка
@@ -307,7 +308,7 @@ def process_message(chat_id, user_id, text, username, first_name, last_name, is_
             else:
                 send_message(chat_id, "📭 Нет игр", main_keyboard(is_premium))
         
-        elif text == "👋 Профиль" or text.startswith("<tg-emoji") and "Профиль" in text or text == "👤 Профиль":
+        elif text == "👋 Профиль" or (text.startswith("<tg-emoji") and "Профиль" in text) or text == "👤 Профиль":
             user_data = get_user(user_id)
             if is_premium:
                 profile_text = (
@@ -343,10 +344,12 @@ def process_message(chat_id, user_id, text, username, first_name, last_name, is_
                 send_message(chat_id, "📭 Пока нет читов.", main_keyboard(is_premium))
         
         elif text.startswith("🎮") or (text.startswith("<tg-emoji") and "Игры" not in text):
-            # Убираем эмодзи из текста
+            # Извлекаем название игры (убираем эмодзи)
             game = text.split(" ", 1)[-1] if " " in text else text
             if game.startswith("<tg-emoji"):
-                game = game.split(">")[-1].strip()
+                # Убираем HTML-тег эмодзи
+                import re
+                game = re.sub(r'<[^>]+>', '', game).strip()
             files = get_files_by_game(game)
             if files:
                 keyboard = cheats_keyboard(files, game, is_premium)
@@ -461,7 +464,6 @@ def process_document(chat_id, user_id, file_id, file_name, caption):
         
         waiting_for_file[user_id] = False
         
-        # Парсим подпись
         name = file_name
         game = "Без игры"
         if caption and "|" in caption:
@@ -471,19 +473,12 @@ def process_document(chat_id, user_id, file_id, file_name, caption):
         elif caption:
             name = caption.strip()
         
-        # Генерируем хеш
         file_hash = secrets.token_urlsafe(8)
+        add_file(file_hash, file_id, "doc", name, game, user_id)
         
-        # Сохраняем в базу
-        conn.execute(
-            "INSERT INTO files (hash, file_id, type, name, game, created_by) VALUES (?, ?, ?, ?, ?, ?)",
-            (file_hash, file_id, "doc", name, game, user_id)
-        )
-        conn.commit()
-        
-        # Отправляем подтверждение
-        is_premium = conn.execute("SELECT is_premium FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        is_premium = is_premium['is_premium'] if is_premium else False
+        # Проверяем, премиум ли пользователь
+        user = conn.execute("SELECT is_premium FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        is_premium = user['is_premium'] if user else False
         
         if is_premium:
             text = (
@@ -501,7 +496,7 @@ def process_document(chat_id, user_id, file_id, file_name, caption):
         logger.error(f"Document error: {e}")
         send_message(chat_id, f"❌ Ошибка: {e}")
 
-# --- ГЛАВНЫЙ ЦИКЛ ---
+# --- ГЛАВНЫЙ ЦИКЛ (БЕЗ СПАМА) ---
 def main():
     logger.info("🚀 Запуск Plutonium Bot")
     logger.info(f"👑 Владелец: {OWNER_ID}")
@@ -511,11 +506,12 @@ def main():
     while True:
         try:
             updates = get_updates(offset, timeout=30)
-            if updates.get('ok'):
-                for update in updates.get('result', []):
+            if updates.get('ok') and updates.get('result'):
+                for update in updates['result']:
+                    # Обновляем offset ПЕРЕД обработкой, чтобы не зацикливаться
                     offset = update['update_id'] + 1
                     
-                    # Обработка callback_query
+                    # Callback
                     if 'callback_query' in update:
                         cb = update['callback_query']
                         user = cb['from']
@@ -528,7 +524,7 @@ def main():
                             user.get('is_premium', False)
                         )
                     
-                    # Обработка сообщений
+                    # Сообщение
                     elif 'message' in update:
                         msg = update['message']
                         chat_id = msg['chat']['id']
@@ -539,16 +535,11 @@ def main():
                         last_name = user.get('last_name', '')
                         is_premium = user.get('is_premium', False)
                         
-                        # Сохраняем пользователя если новый
-                        existing = conn.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,)).fetchone()
-                        if not existing:
-                            conn.execute(
-                                "INSERT INTO users (user_id, username, first_name, last_name, is_premium) VALUES (?, ?, ?, ?, ?)",
-                                (user_id, username, first_name, last_name, 1 if is_premium else 0)
-                            )
-                            conn.commit()
+                        # Сохраняем нового пользователя
+                        if not get_user(user_id):
+                            save_user(user_id, username, first_name, last_name, is_premium)
                         
-                        # Команда /start
+                        # /start
                         if 'text' in msg and msg['text'].startswith('/start'):
                             args = msg['text'].replace('/start', '').strip()
                             inviter_id = None
@@ -556,10 +547,7 @@ def main():
                                 try:
                                     inviter_id = int(args.split('_')[1])
                                     if inviter_id != user_id:
-                                        # Обновляем пригласившего
-                                        conn.execute("UPDATE users SET total_invites = total_invites + 1 WHERE user_id = ?", (inviter_id,))
-                                        conn.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (inviter_id, user_id))
-                                        conn.commit()
+                                        save_user(user_id, username, first_name, last_name, is_premium, inviter_id)
                                 except:
                                     pass
                             
@@ -570,7 +558,6 @@ def main():
                                     subscribe_keyboard(is_premium)
                                 )
                             else:
-                                # Приветствие
                                 if is_premium:
                                     text = (
                                         f"<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> **Привет, {first_name}!**\n\n"
@@ -580,18 +567,18 @@ def main():
                                 else:
                                     text = f"👋 **Привет, {first_name}!**\n\n🙂 **Я храню файлы с канала** @OfficialPlutonium\n📁 **Используй кнопки ниже**"
                                 
-                                user_data = conn.execute("SELECT total_invites FROM users WHERE user_id = ?", (user_id,)).fetchone()
+                                user_data = get_user(user_id)
                                 invites = user_data['total_invites'] if user_data else 0
                                 text += f"\n\n👥 Приглашений: {invites}"
                                 
                                 keyboard = admin_keyboard(is_premium) if is_admin(user_id) else main_keyboard(is_premium)
                                 send_message(chat_id, text, keyboard)
                         
-                        # Текстовое сообщение
+                        # Текст
                         elif 'text' in msg:
                             process_message(
-                                chat_id, user_id, msg['text'], 
-                                username, first_name, last_name, 
+                                chat_id, user_id, msg['text'],
+                                username, first_name, last_name,
                                 is_premium, msg['message_id']
                             )
                         
@@ -608,6 +595,5 @@ def main():
             logger.error(f"Main loop error: {e}")
             time.sleep(5)
 
-# --- ЗАПУСК ---
 if __name__ == "__main__":
     main()
