@@ -8,42 +8,47 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class Config:
-    """Конфигурация бота"""
+    """Конфигурация бота с значениями по умолчанию"""
     
-    # Telegram API
-    API_ID = int(os.environ.get("API_ID", 0))
-    API_HASH = os.environ.get("API_HASH", "")
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+    # Telegram API - берем из переменных или используем значения по умолчанию
+    API_ID = int(os.environ.get("API_ID", 39522849))
+    API_HASH = os.environ.get("API_HASH", "26909eddad0be2400fb765fad0e267f8")
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw")
     
     # Владелец
-    OWNER_ID = int(os.environ.get("OWNER_ID", 0))
+    OWNER_ID = int(os.environ.get("OWNER_ID", 1471307057))
     
-    # Каналы
-    CHANNEL_URL = os.environ.get("CHANNEL_URL", "")
-    CHANNEL_ID = os.environ.get("CHANNEL_ID", "")
-    STORAGE_CHANNEL = os.environ.get("STORAGE_CHANNEL", "")
+    # Каналы (опциональные)
+    CHANNEL_URL = os.environ.get("CHANNEL_URL", "https://t.me/OfficialPlutonium")
+    CHANNEL_ID = os.environ.get("CHANNEL_ID", "@OfficialPlutonium")
+    STORAGE_CHANNEL = os.environ.get("STORAGE_CHANNEL", "@IllyaTelegram")
     
     # База данных
     DB_PATH = "files.db"
     
     @classmethod
     def validate(cls):
-        """Проверка обязательных переменных"""
-        errors = []
+        """Проверка переменных с выводом предупреждений, но без падения"""
+        warnings = []
+        
         if not cls.API_ID:
-            errors.append("API_ID")
+            warnings.append("API_ID не установлен, используется значение по умолчанию")
         if not cls.API_HASH:
-            errors.append("API_HASH")
+            warnings.append("API_HASH не установлен, используется значение по умолчанию")
         if not cls.BOT_TOKEN:
-            errors.append("BOT_TOKEN")
+            warnings.append("BOT_TOKEN не установлен, используется значение по умолчанию")
         if not cls.OWNER_ID:
-            errors.append("OWNER_ID")
+            warnings.append("OWNER_ID не установлен, используется значение по умолчанию")
         
-        if errors:
-            raise ValueError(f"Missing required env: {', '.join(errors)}")
+        if warnings:
+            for w in warnings:
+                logger.warning(w)
+        else:
+            logger.info("✅ Все переменные окружения загружены")
         
-        logger.info("✅ Конфигурация загружена")
         return True
 
 # Проверяем при импорте
 Config.validate()
+logger.info(f"🚀 Бот запускается с API_ID: {Config.API_ID}")
+logger.info(f"👑 Владелец: {Config.OWNER_ID}")
