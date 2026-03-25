@@ -16,7 +16,10 @@ STORAGE_CHANNEL = os.environ.get("STORAGE_CHANNEL", "IllyaTelegram")
 DB_PATH = "files.db"
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # --- БАЗА ДАННЫХ ---
@@ -73,7 +76,7 @@ def api(method, data=None):
         with urllib.request.urlopen(req, timeout=30) as response:
             return json.loads(response.read().decode())
     except Exception as e:
-        logger.error(f"API error: {e}")
+        logger.error(f"API error in {method}: {e}")
         return {'ok': False}
 
 def send_message(chat_id, text, reply_markup=None):
@@ -87,9 +90,6 @@ def send_document(chat_id, file_id, caption=None):
     if caption:
         data["caption"] = caption
     return api("sendDocument", data)
-
-def copy_message(chat_id, from_chat_id, message_id):
-    return api("copyMessage", {"chat_id": chat_id, "from_chat_id": from_chat_id, "message_id": message_id})
 
 def get_chat_member(chat_id, user_id):
     return api("getChatMember", {"chat_id": chat_id, "user_id": user_id})
@@ -110,7 +110,7 @@ def edit_message(chat_id, message_id, text, reply_markup=None):
 
 def get_updates(offset=None, timeout=30):
     data = {"timeout": timeout}
-    if offset:
+    if offset is not None:
         data["offset"] = offset
     return api("getUpdates", data)
 
@@ -122,7 +122,6 @@ def is_admin(user_id):
     return admin is not None
 
 def check_subscription(user_id):
-    """Проверка подписки на канал"""
     if not CHANNEL_ID:
         return True
     try:
@@ -132,7 +131,6 @@ def check_subscription(user_id):
             return status in ('member', 'administrator', 'creator')
         return False
     except Exception as e:
-        # Если бот не админ в канале или другая ошибка — пропускаем проверку
         logger.error(f"Subscription check error: {e}")
         return True
 
@@ -188,11 +186,11 @@ def cleanup_inactive():
 def get_all_files():
     return conn.execute("SELECT name, game, downloads FROM files ORDER BY game, name").fetchall()
 
-# --- ХРАНИЛИЩА ДЛЯ СОСТОЯНИЙ ---
+# --- ХРАНИЛИЩА ---
 waiting_for_file = {}
 waiting_for_broadcast = {}
 
-# --- КЛАВИАТУРЫ С ПРЯМЫМИ ID ЭМОДЗИ ---
+# --- КЛАВИАТУРЫ (с прямыми ID эмодзи, премиум не трогаем) ---
 def main_keyboard(is_premium=False):
     if is_premium:
         return {
@@ -231,14 +229,12 @@ def subscribe_keyboard(is_premium=False):
                 [{
                     "text": "ПОДПИСАТЬСЯ",
                     "url": CHANNEL_URL,
-                    "icon_custom_emoji_id": "5927118708873892465",  # 📢
-                    "style": "primary"
+                    "icon_custom_emoji_id": "5927118708873892465"
                 }],
                 [{
                     "text": "ПРОВЕРИТЬ",
                     "callback_data": "check_sub",
-                    "icon_custom_emoji_id": "5774022692642492953",  # 🔄
-                    "style": "success"
+                    "icon_custom_emoji_id": "5774022692642492953"
                 }]
             ]
         }
@@ -364,7 +360,6 @@ def process_message(chat_id, user_id, text, username, first_name, last_name, is_
                 send_message(chat_id, "📭 Пока нет читов.", main_keyboard(is_premium))
 
         elif text.startswith("🎮") or (text.startswith("<tg-emoji") and "Игры" not in text):
-            # Извлекаем название игры
             game = text.split(" ", 1)[-1] if " " in text else text
             if game.startswith("<tg-emoji"):
                 game = re.sub(r'<[^>]+>', '', game).strip()
@@ -439,9 +434,11 @@ def process_message(chat_id, user_id, text, username, first_name, last_name, is_
         logger.error(f"Process error: {e}")
 
 def process_callback(callback_id, chat_id, message_id, data, user_id, is_premium):
+    logger.info(f"🔔 Callback: data={data}, user_id={user_id}")
     try:
         if data == "check_sub":
             subscribed = check_subscription(user_id)
+            logger.info(f"Subscription result: {subscribed}")
             if subscribed:
                 user_data = get_user(user_id)
                 first_name = user_data.get('first_name', 'Пользователь') if user_data else 'Пользователь'
@@ -457,8 +454,7 @@ def process_callback(callback_id, chat_id, message_id, data, user_id, is_premium
                 edit_message(chat_id, message_id, text, keyboard)
                 answer_callback(callback_id, "✅ Подписка подтверждена!")
             else:
-                answer_callback(callback_id, "❌ Вы еще не подписались!", True)
-
+                answer_callback(callback_id, "❌ Вы еще не подписались!", show_alert=True)
         elif data.startswith("file_"):
             file_hash = data.split("_")[1]
             file_data = conn.execute("SELECT file_id, name FROM files WHERE hash = ?", (file_hash,)).fetchone()
@@ -513,7 +509,7 @@ def process_document(chat_id, user_id, file_id, file_name, caption):
         logger.error(f"Document error: {e}")
         send_message(chat_id, f"❌ Ошибка: {e}")
 
-# --- ГЛАВНЫЙ ЦИКЛ (БЕЗ СПАМА) ---
+# --- ГЛАВНЫЙ ЦИКЛ ---
 def main():
     logger.info("🚀 Запуск Plutonium Bot")
     logger.info(f"👑 Владелец: {OWNER_ID}")
@@ -525,7 +521,6 @@ def main():
             updates = get_updates(offset, timeout=30)
             if updates.get('ok') and updates.get('result'):
                 for update in updates['result']:
-                    # Обновляем offset ПЕРЕД обработкой
                     offset = update['update_id'] + 1
 
                     # Callback
