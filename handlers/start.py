@@ -1,9 +1,8 @@
 import logging
-from pyrogram import Client, filters
+from pyrogram import Client
 from pyrogram.types import Message
 from database import db
 from keyboards import Keyboards
-from utils.helpers import check_subscription
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -34,13 +33,19 @@ async def start_command(client: Client, message: Message):
     )
     
     # Проверяем подписку
-    subscribed = await check_subscription(client, user.id)
+    try:
+        member = await client.get_chat_member(Config.CHANNEL_ID, user.id)
+        subscribed = member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        logger.warning(f"Check subscription error: {e}")
+        subscribed = True  # Если ошибка - пропускаем проверку
     
     if not subscribed:
         await message.reply(
             f"🔒 **Доступ ограничен!**\n\n"
             f"👋 Привет, {user.first_name}!\n\n"
-            f"Для доступа к читам подпишись на канал.",
+            f"Для доступа к читам подпишись на канал.\n\n"
+            f"📢 **Канал:** {Config.CHANNEL_ID}",
             reply_markup=Keyboards.subscribe()
         )
         return
@@ -55,6 +60,6 @@ async def start_command(client: Client, message: Message):
         f"🎮 **Plutonium Cheats**\n\n"
         f"👋 Добро пожаловать, {user.first_name}!\n"
         f"👥 Приглашений: {invites}\n\n"
-        f"Используй кнопки ниже:",
+        f"📌 Используй кнопки ниже для навигации.",
         reply_markup=keyboard
     )
