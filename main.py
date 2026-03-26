@@ -61,8 +61,7 @@ conn.execute("""
         file_id TEXT,
         name TEXT,
         game TEXT,
-        downloads INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        downloads INTEGER DEFAULT 0
     )
 """)
 conn.execute("""
@@ -70,33 +69,19 @@ conn.execute("""
         user_id INTEGER PRIMARY KEY,
         username TEXT,
         first_name TEXT,
-        last_name TEXT,
         is_premium INTEGER DEFAULT 0,
         invited_by INTEGER DEFAULT 0,
         total_invites INTEGER DEFAULT 0,
-        total_downloads INTEGER DEFAULT 0,
-        last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-""")
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS invites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        inviter_id INTEGER,
-        invited_id INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        total_downloads INTEGER DEFAULT 0
     )
 """)
 conn.execute("""
     CREATE TABLE IF NOT EXISTS admins (
-        user_id INTEGER PRIMARY KEY,
-        added_by INTEGER,
-        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        user_id INTEGER PRIMARY KEY
     )
 """)
-conn.execute("INSERT OR IGNORE INTO admins (user_id, added_by) VALUES (?, ?)", (OWNER_ID, OWNER_ID))
+conn.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (OWNER_ID,))
 conn.commit()
-logger.info("✅ База данных готова")
 
 # --- ФУНКЦИИ ---
 def send_message(chat_id, text, reply_markup=None):
@@ -129,7 +114,7 @@ def edit_message(chat_id, message_id, text, reply_markup=None):
     return api("editMessageText", data)
 
 def get_updates(offset=None):
-    data = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
+    data = {"timeout": 30}
     if offset:
         data["offset"] = offset
     return api("getUpdates", data)
@@ -153,14 +138,13 @@ def check_subscription(user_id):
     except:
         return True
 
-def save_user(user_id, username, first_name, last_name, is_premium, inviter_id=None):
+def save_user(user_id, username, first_name, is_premium, inviter_id=None):
     conn.execute(
-        "INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, is_premium, invited_by) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, username, first_name, last_name, 1 if is_premium else 0, inviter_id or 0)
+        "INSERT OR IGNORE INTO users (user_id, username, first_name, is_premium, invited_by) VALUES (?, ?, ?, ?, ?)",
+        (user_id, username, first_name, 1 if is_premium else 0, inviter_id or 0)
     )
     if inviter_id and inviter_id != user_id:
         conn.execute("UPDATE users SET total_invites = total_invites + 1 WHERE user_id = ?", (inviter_id,))
-        conn.execute("INSERT INTO invites (inviter_id, invited_id) VALUES (?, ?)", (inviter_id, user_id))
     conn.commit()
 
 def get_user(user_id):
@@ -172,10 +156,10 @@ def get_all_games():
 def get_files_by_game(game):
     return conn.execute("SELECT hash, file_id, name FROM files WHERE game = ?", (game,)).fetchall()
 
-def add_file(file_hash, file_id, name, game, created_by):
+def add_file(file_hash, file_id, name, game):
     conn.execute(
-        "INSERT INTO files (hash, file_id, name, game, created_by) VALUES (?, ?, ?, ?, ?)",
-        (file_hash, file_id, name, game, created_by)
+        "INSERT INTO files (hash, file_id, name, game) VALUES (?, ?, ?, ?)",
+        (file_hash, file_id, name, game)
     )
     conn.commit()
 
@@ -183,31 +167,6 @@ def increment_downloads(file_hash, user_id):
     conn.execute("UPDATE files SET downloads = downloads + 1 WHERE hash = ?", (file_hash,))
     conn.execute("UPDATE users SET total_downloads = total_downloads + 1 WHERE user_id = ?", (user_id,))
     conn.commit()
-
-def get_stats():
-    files = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-    users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    invites = conn.execute("SELECT SUM(total_invites) FROM users").fetchone()[0] or 0
-    downloads = conn.execute("SELECT SUM(downloads) FROM files").fetchone()[0] or 0
-    premium = conn.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1").fetchone()[0]
-    return {'files': files, 'users': users, 'invites': invites, 'downloads': downloads, 'premium': premium}
-
-def cleanup_inactive():
-    cursor = conn.execute("""
-        DELETE FROM users 
-        WHERE julianday('now') - julianday(last_active) > 30 
-        AND user_id NOT IN (SELECT user_id FROM admins)
-        AND user_id != ?
-    """, (OWNER_ID,))
-    conn.commit()
-    return cursor.rowcount
-
-def get_all_files():
-    return conn.execute("SELECT name, game, downloads FROM files ORDER BY game, name").fetchall()
-
-# --- ХРАНИЛИЩА ---
-waiting_for_file = {}
-waiting_for_broadcast = {}
 
 # --- КЛАВИАТУРЫ ---
 def main_keyboard(is_premium=False):
@@ -230,23 +189,20 @@ def main_keyboard(is_premium=False):
             "resize_keyboard": True
         }
 
-def admin_keyboard(is_premium=False):
-    return {
-        "keyboard": [
-            [{"text": "📁 Добавить чит"}, {"text": "📋 Список читов"}],
-            [{"text": "👥 Пользователи"}, {"text": "📢 Рассылка"}],
-            [{"text": "📊 Статистика"}, {"text": "🧹 Очистка"}],
-            [{"text": "💾 Бэкап"}, {"text": "🔙 Главное меню"}]
-        ],
-        "resize_keyboard": True
-    }
-
 def subscribe_keyboard(is_premium=False):
     if is_premium:
         return {
             "inline_keyboard": [
-                [{"text": "ПОДПИСАТЬСЯ", "url": CHANNEL_URL, "icon_custom_emoji_id": "5927118708873892465"}],
-                [{"text": "ПРОВЕРИТЬ", "callback_data": "check_sub", "icon_custom_emoji_id": "5774022692642492953"}]
+                [{
+                    "text": "ПОДПИСАТЬСЯ",
+                    "url": CHANNEL_URL,
+                    "icon_custom_emoji_id": "5927118708873892465"
+                }],
+                [{
+                    "text": "ПРОВЕРИТЬ",
+                    "callback_data": "check_sub",
+                    "icon_custom_emoji_id": "5774022692642492953"
+                }]
             ]
         }
     else:
@@ -278,11 +234,20 @@ def cheats_keyboard(cheats):
     buttons.append([{"text": "🔙 Назад к играм"}])
     return {"keyboard": buttons, "resize_keyboard": True}
 
-def file_footer(is_premium=False):
-    if is_premium:
-        return f"\n\n<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> **Ваш Файл**\n<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> **Buy plutonium** - @PlutoniumllcBot"
-    else:
-        return "\n\n📤 **Ваш Файл**\n🏪 **Buy plutonium** - @PlutoniumllcBot"
+def admin_keyboard(is_premium=False):
+    return {
+        "keyboard": [
+            [{"text": "📁 Добавить чит"}, {"text": "📋 Список читов"}],
+            [{"text": "👥 Пользователи"}, {"text": "📢 Рассылка"}],
+            [{"text": "📊 Статистика"}, {"text": "🧹 Очистка"}],
+            [{"text": "💾 Бэкап"}, {"text": "🔙 Главное меню"}]
+        ],
+        "resize_keyboard": True
+    }
+
+# --- ХРАНИЛИЩА ---
+waiting_for_file = {}
+waiting_for_broadcast = {}
 
 # --- ОБРАБОТЧИКИ ---
 def process_message(chat_id, user_id, text, first_name, is_premium):
@@ -313,9 +278,6 @@ def process_message(chat_id, user_id, text, first_name, is_premium):
                 msg_text = f"🔒 **Привет, {first_name}!**\n\n🔓 **Подпишись на канал для доступа к читам.**"
             send_message(chat_id, msg_text, subscribe_keyboard(is_premium))
             return
-
-        conn.execute("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
-        conn.commit()
 
         # --- КНОПКИ ---
         if text == "🔙 Главное меню":
@@ -384,7 +346,7 @@ def process_message(chat_id, user_id, text, first_name, is_premium):
                 send_message(chat_id, "📤 **Добавление чита**\n\n1. Отправь файл\n2. В подписи: `Название | Игра`\n\nПример: `Aimbot | CS2`\n/cancel - отмена", admin_keyboard(is_premium))
 
             elif text == "📋 Список читов":
-                files = get_all_files()
+                files = conn.execute("SELECT name, game, downloads FROM files ORDER BY game, name").fetchall()
                 if not files:
                     send_message(chat_id, "📭 База читов пуста.", admin_keyboard(is_premium))
                     return
@@ -412,12 +374,17 @@ def process_message(chat_id, user_id, text, first_name, is_premium):
                 send_message(chat_id, "📢 **Рассылка**\n\nОтправь сообщение для рассылки.\n/cancel - отмена", admin_keyboard(is_premium))
 
             elif text == "📊 Статистика":
-                stats = get_stats()
-                send_message(chat_id, f"📊 **Статистика**\n\n📁 Читов: {stats['files']}\n👥 Пользователей: {stats['users']}\n👑 Премиум: {stats['premium']}\n⬇️ Скачиваний: {stats['downloads']}\n🔗 Приглашений: {stats['invites']}", admin_keyboard(is_premium))
+                files = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+                users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+                invites = conn.execute("SELECT SUM(total_invites) FROM users").fetchone()[0] or 0
+                downloads = conn.execute("SELECT SUM(downloads) FROM files").fetchone()[0] or 0
+                premium = conn.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1").fetchone()[0]
+                send_message(chat_id, f"📊 **Статистика**\n\n📁 Читов: {files}\n👥 Пользователей: {users}\n👑 Премиум: {premium}\n⬇️ Скачиваний: {downloads}\n🔗 Приглашений: {invites}", admin_keyboard(is_premium))
 
             elif text == "🧹 Очистка":
-                deleted = cleanup_inactive()
-                send_message(chat_id, f"🧹 Удалено неактивных: {deleted}", admin_keyboard(is_premium))
+                conn.execute("DELETE FROM users WHERE user_id NOT IN (SELECT user_id FROM admins) AND user_id != ?", (OWNER_ID,))
+                conn.commit()
+                send_message(chat_id, "✅ Очищено", admin_keyboard(is_premium))
 
             elif text == "💾 Бэкап":
                 if os.path.exists(DB_PATH):
@@ -445,6 +412,7 @@ def process_message(chat_id, user_id, text, first_name, is_premium):
         logger.error(f"Process error: {e}")
 
 def process_callback(callback_id, chat_id, message_id, data, user_id, is_premium):
+    logger.info(f"Callback received: {data}")
     try:
         if data == "check_sub":
             subscribed = check_subscription(user_id)
@@ -464,14 +432,12 @@ def process_callback(callback_id, chat_id, message_id, data, user_id, is_premium
                 answer_callback(callback_id, "✅ Подписка подтверждена!")
             else:
                 answer_callback(callback_id, "❌ Вы еще не подписались!", True)
-
         elif data.startswith("file_"):
             file_hash = data.split("_")[1]
             file_data = conn.execute("SELECT file_id, name FROM files WHERE hash = ?", (file_hash,)).fetchone()
             if file_data:
                 increment_downloads(file_hash, user_id)
-                footer = file_footer(is_premium)
-                send_document(chat_id, file_data['file_id'], f"✅ {file_data['name']} отправлен!{footer}")
+                send_document(chat_id, file_data['file_id'], f"✅ {file_data['name']} отправлен!")
                 answer_callback(callback_id, f"✅ {file_data['name']} отправлен!")
             else:
                 answer_callback(callback_id, "❌ Файл не найден", True)
@@ -498,7 +464,7 @@ def process_document(chat_id, user_id, file_id, file_name, caption):
             name = caption.strip()
 
         file_hash = secrets.token_urlsafe(8)
-        add_file(file_hash, file_id, name, game, user_id)
+        add_file(file_hash, file_id, name, game)
 
         user = conn.execute("SELECT is_premium FROM users WHERE user_id = ?", (user_id,)).fetchone()
         is_premium = user['is_premium'] if user else False
@@ -554,11 +520,10 @@ def main():
                         user_id = user['id']
                         username = user.get('username', '')
                         first_name = user.get('first_name', '')
-                        last_name = user.get('last_name', '')
                         is_premium = user.get('is_premium', False)
 
                         if not get_user(user_id):
-                            save_user(user_id, username, first_name, last_name, is_premium)
+                            save_user(user_id, username, first_name, is_premium)
 
                         if 'text' in msg and msg['text'].startswith('/start'):
                             args = msg['text'].replace('/start', '').strip()
@@ -567,7 +532,7 @@ def main():
                                 try:
                                     inviter_id = int(args.split('_')[1])
                                     if inviter_id != user_id:
-                                        save_user(user_id, username, first_name, last_name, is_premium, inviter_id)
+                                        save_user(user_id, username, first_name, is_premium, inviter_id)
                                 except:
                                     pass
 
@@ -613,3 +578,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+      
