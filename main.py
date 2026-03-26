@@ -102,39 +102,39 @@ def get_channel_link(channel_id):
     except:
         return None
 
-# --- КЛАВИАТУРЫ (с TG Premium эмодзи) ---
+# --- КЛАВИАТУРЫ (с TG Premium эмодзи через icon_custom_emoji_id) ---
 def main_kb(uid):
     kb = [
-        [{"text": "<tg-emoji emoji-id=\"5938413566624272793\">🎮</tg-emoji> Игры", "callback_data": "menu_games", "parse_mode": "HTML"}],
-        [{"text": "<tg-emoji emoji-id=\"6032693626394382504\">👤</tg-emoji> Профиль", "callback_data": "menu_prof", "parse_mode": "HTML"},
-         {"text": "<tg-emoji emoji-id=\"6030622631818956594\">❓</tg-emoji> Помощь", "callback_data": "menu_help", "parse_mode": "HTML"}]
+        [{"text": "Игры", "callback_data": "menu_games", "icon_custom_emoji_id": "5938413566624272793"}],
+        [{"text": "Профиль", "callback_data": "menu_prof", "icon_custom_emoji_id": "6032693626394382504"},
+         {"text": "Помощь", "callback_data": "menu_help", "icon_custom_emoji_id": "6030622631818956594"}]
     ]
     if is_admin(uid):
-        kb.append([{"text": "<tg-emoji emoji-id=\"6030445631921721471\">⚡</tg-emoji> Админ панель", "callback_data": "adm_root", "parse_mode": "HTML"}])
+        kb.append([{"text": "Админ панель", "callback_data": "adm_root", "icon_custom_emoji_id": "6030445631921721471"}])
     return {"inline_keyboard": kb}
 
 def admin_kb(uid):
     kb = [
-        [{"text": "<tg-emoji emoji-id=\"6037622221625626773\">📢</tg-emoji> Рассылка", "callback_data": "a_broad", "parse_mode": "HTML"},
-         {"text": "<tg-emoji emoji-id=\"6021792097454002931\">🧹</tg-emoji> Очистка", "callback_data": "a_clean", "parse_mode": "HTML"}],
-        [{"text": "<tg-emoji emoji-id=\"5805648413743651862\">📁</tg-emoji> Добавить файл", "callback_data": "a_addfile", "parse_mode": "HTML"},
-         {"text": "<tg-emoji emoji-id=\"5962952497197748583\">🔗</tg-emoji> ОП", "callback_data": "a_op", "parse_mode": "HTML"}],
-        [{"text": "<tg-emoji emoji-id=\"5904248647972820334\">📢</tg-emoji> Реклама", "callback_data": "a_ads", "parse_mode": "HTML"},
-         {"text": "<tg-emoji emoji-id=\"5776227595708273495\">🚫</tg-emoji> Бан/Разбан", "callback_data": "a_ban", "parse_mode": "HTML"}],
-        [{"text": "<tg-emoji emoji-id=\"6032742198179532882\">📊</tg-emoji> Статистика", "callback_data": "a_stat", "parse_mode": "HTML"}]
+        [{"text": "Рассылка", "callback_data": "a_broad", "icon_custom_emoji_id": "6037622221625626773"},
+         {"text": "Очистка", "callback_data": "a_clean", "icon_custom_emoji_id": "6021792097454002931"}],
+        [{"text": "Добавить файл", "callback_data": "a_addfile", "icon_custom_emoji_id": "5805648413743651862"},
+         {"text": "ОП", "callback_data": "a_op", "icon_custom_emoji_id": "5962952497197748583"}],
+        [{"text": "Реклама", "callback_data": "a_ads", "icon_custom_emoji_id": "5904248647972820334"},
+         {"text": "Бан/Разбан", "callback_data": "a_ban", "icon_custom_emoji_id": "5776227595708273495"}],
+        [{"text": "Статистика", "callback_data": "a_stat", "icon_custom_emoji_id": "6032742198179532882"}]
     ]
     if uid == OWNER_ID:
-        kb.append([{"text": "<tg-emoji emoji-id=\"6032636795387121097\">👑</tg-emoji> Управление админами", "callback_data": "a_mng", "parse_mode": "HTML"}])
-    kb.append([{"text": "🔙 Назад", "callback_data": "to_main"}])
+        kb.append([{"text": "Управление админами", "callback_data": "a_mng", "icon_custom_emoji_id": "6032636795387121097"}])
+    kb.append([{"text": "Назад", "callback_data": "to_main"}])
     return {"inline_keyboard": kb}
 
 def games_kb():
     return {
         "inline_keyboard": [
-            [{"text": "<tg-emoji emoji-id=\"5393134637667094112\">🎮</tg-emoji> Standoff 2", "callback_data": "game_so2", "parse_mode": "HTML"}],
-            [{"text": "<tg-emoji emoji-id=\"6073605466221451561\">🎮</tg-emoji> Pubg Mobile", "callback_data": "game_pubg", "parse_mode": "HTML"}],
-            [{"text": "<tg-emoji emoji-id=\"6095674537196653589\">🎮</tg-emoji> Other Games", "callback_data": "game_other", "parse_mode": "HTML"}],
-            [{"text": "🔙 Назад", "callback_data": "to_main"}]
+            [{"text": "Standoff 2", "callback_data": "game_so2", "icon_custom_emoji_id": "5393134637667094112"}],
+            [{"text": "Pubg Mobile", "callback_data": "game_pubg", "icon_custom_emoji_id": "6073605466221451561"}],
+            [{"text": "Other Games", "callback_data": "game_other", "icon_custom_emoji_id": "6095674537196653589"}],
+            [{"text": "Назад", "callback_data": "to_main"}]
         ]
     }
 
@@ -142,19 +142,19 @@ def files_kb(files):
     kb = []
     for f in files[:10]:
         kb.append([{"text": f"📄 {f['name'][:30]}", "callback_data": f"dl_{f['hash']}"}])
-    kb.append([{"text": "🔙 Назад", "callback_data": "menu_games"}])
+    kb.append([{"text": "Назад", "callback_data": "menu_games"}])
     return {"inline_keyboard": kb}
 
 def back_kb():
-    return {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "to_main"}]]}
+    return {"inline_keyboard": [[{"text": "Назад", "callback_data": "to_main"}]]}
 
 def perms_kb(target_id):
     return {
         "inline_keyboard": [
-            [{"text": "<tg-emoji emoji-id=\"5805648413743651862\">📁</tg-emoji> Добавить файл", "callback_data": f"perm_addfile_{target_id}", "parse_mode": "HTML"}],
-            [{"text": "<tg-emoji emoji-id=\"6037622221625626773\">📢</tg-emoji> Рассылка", "callback_data": f"perm_broad_{target_id}", "parse_mode": "HTML"}],
-            [{"text": "<tg-emoji emoji-id=\"6030445631921721471\">👑</tg-emoji> Все права", "callback_data": f"perm_all_{target_id}", "parse_mode": "HTML"}],
-            [{"text": "❌ Отмена", "callback_data": "a_mng"}]
+            [{"text": "Добавить файл", "callback_data": f"perm_addfile_{target_id}", "icon_custom_emoji_id": "5805648413743651862"}],
+            [{"text": "Рассылка", "callback_data": f"perm_broad_{target_id}", "icon_custom_emoji_id": "6037622221625626773"}],
+            [{"text": "Все права", "callback_data": f"perm_all_{target_id}", "icon_custom_emoji_id": "6030445631921721471"}],
+            [{"text": "Отмена", "callback_data": "a_mng"}]
         ]
     }
 
@@ -163,8 +163,8 @@ def op_check_kb(channel_id):
     if link:
         return {
             "inline_keyboard": [
-                [{"text": "<tg-emoji emoji-id=\"5927118708873892465\">✅</tg-emoji> ПОДПИСАТЬСЯ", "url": link, "parse_mode": "HTML"}],
-                [{"text": "<tg-emoji emoji-id=\"5774022692642492953\">🔄</tg-emoji> ПРОВЕРИТЬ", "callback_data": f"op_check_{channel_id}", "parse_mode": "HTML"}]
+                [{"text": "ПОДПИСАТЬСЯ", "url": link, "icon_custom_emoji_id": "5927118708873892465"}],
+                [{"text": "ПРОВЕРИТЬ", "callback_data": f"op_check_{channel_id}", "icon_custom_emoji_id": "5774022692642492953"}]
             ]
         }
     return None
@@ -172,8 +172,8 @@ def op_check_kb(channel_id):
 def channel_check_kb():
     return {
         "inline_keyboard": [
-            [{"text": "<tg-emoji emoji-id=\"5927118708873892465\">✅</tg-emoji> ПОДПИСАТЬСЯ", "url": "https://t.me/OfficialPlutonium", "parse_mode": "HTML"}],
-            [{"text": "<tg-emoji emoji-id=\"5774022692642492953\">🔄</tg-emoji> ПРОВЕРИТЬ", "callback_data": "channel_check", "parse_mode": "HTML"}]
+            [{"text": "ПОДПИСАТЬСЯ", "url": "https://t.me/OfficialPlutonium", "icon_custom_emoji_id": "5927118708873892465"}],
+            [{"text": "ПРОВЕРИТЬ", "callback_data": "channel_check", "icon_custom_emoji_id": "5774022692642492953"}]
         ]
     }
 
