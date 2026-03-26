@@ -15,8 +15,9 @@ PHOTO_URL = "https://files.catbox.moe/jdtlab.jpg"
 DB_PATH = "plutonium_full.db"
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ID канала OfficialPlutonium (числовой)
-CHANNEL_ID = -1003607014773
+# ID каналов
+CHANNEL_ID = -1003607014773  # Канал для подписки
+STORAGE_CHANNEL_ID = -1003677537552  # Канал для хранения файлов
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ def init_db():
     c.execute("CREATE TABLE IF NOT EXISTS files (hash TEXT PRIMARY KEY, file_id TEXT, name TEXT, game TEXT, ts INTEGER, created_by INTEGER, downloads INTEGER DEFAULT 0)")
     c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, downloads INTEGER DEFAULT 0, banned INTEGER DEFAULT 0, last_active INTEGER DEFAULT 0)")
     c.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY, perms TEXT, added_by INTEGER)")
-    c.execute("CREATE TABLE IF NOT EXISTS op_settings (id INTEGER PRIMARY KEY, link TEXT, target INTEGER, current INTEGER DEFAULT 0, active INTEGER DEFAULT 0)")
+    c.execute("CREATE TABLE IF NOT EXISTS op_settings (id INTEGER PRIMARY KEY, channel_id INTEGER, target INTEGER, current INTEGER DEFAULT 0, active INTEGER DEFAULT 0, link TEXT)")
     c.execute("CREATE TABLE IF NOT EXISTS ads (msg_id INTEGER PRIMARY KEY, chat_id INTEGER, expire INTEGER)")
     c.execute("INSERT OR IGNORE INTO admins (user_id, perms, added_by) VALUES (?, ?, ?)", (OWNER_ID, '["all"]', OWNER_ID))
     conn.commit()
@@ -78,53 +79,78 @@ def ad_cleaner():
 
 threading.Thread(target=ad_cleaner, daemon=True).start()
 
-# --- ПРОВЕРКА ПОДПИСКИ (ИСПРАВЛЕНА) ---
+# --- ПРОВЕРКА ПОДПИСКИ ---
 def check_subscription(user_id, channel_id):
-    """Проверка подписки пользователя на канал по числовому ID"""
     try:
         result = api("getChatMember", {"chat_id": channel_id, "user_id": user_id})
         if result.get('ok'):
             status = result['result']['status']
-            logger.info(f"User {user_id} status in channel {channel_id}: {status}")
             return status in ['member', 'administrator', 'creator']
         return False
     except Exception as e:
         logger.error(f"Check subscription error: {e}")
         return False
 
-# --- КЛАВИАТУРЫ ---
+def get_channel_link(channel_id):
+    try:
+        result = api("getChat", {"chat_id": channel_id})
+        if result.get('ok'):
+            username = result['result'].get('username')
+            if username:
+                return f"https://t.me/{username}"
+        return None
+    except:
+        return None
+
+# --- ФУНКЦИЯ СОХРАНЕНИЯ ФАЙЛА В КАНАЛ ---
+def save_file_to_storage(file_id, caption=None):
+    """Копирует файл в канал-хранилище и возвращает message_id"""
+    try:
+        result = api("copyMessage", {
+            "chat_id": STORAGE_CHANNEL_ID,
+            "from_chat_id": file_id,
+            "message_id": 1  # Это неверно, нужно переделать
+        })
+        # На самом деле нужно копировать из сообщения, которое пришло админу
+        # В handle_document мы уже получаем file_id, нужно копировать в хранилище
+        return None
+    except Exception as e:
+        logger.error(f"Save to storage error: {e}")
+        return None
+
+# --- КЛАВИАТУРЫ (с TG Premium эмодзи) ---
 def main_kb(uid):
     kb = [
-        [{"text": "Игры", "callback_data": "menu_games", "icon_custom_emoji_id": "5938413566624272793"}],
-        [{"text": "Профиль", "callback_data": "menu_prof", "icon_custom_emoji_id": "6032693626394382504"},
-         {"text": "Помощь", "callback_data": "menu_help", "icon_custom_emoji_id": "6030622631818956594"}]
+        [{"text": "<tg-emoji emoji-id=\"5938413566624272793\">🎮</tg-emoji> Игры", "callback_data": "menu_games", "parse_mode": "HTML"}],
+        [{"text": "<tg-emoji emoji-id=\"6032693626394382504\">👤</tg-emoji> Профиль", "callback_data": "menu_prof", "parse_mode": "HTML"},
+         {"text": "<tg-emoji emoji-id=\"6030622631818956594\">❓</tg-emoji> Помощь", "callback_data": "menu_help", "parse_mode": "HTML"}]
     ]
     if is_admin(uid):
-        kb.append([{"text": "Админ панель", "callback_data": "adm_root", "icon_custom_emoji_id": "6030445631921721471"}])
+        kb.append([{"text": "<tg-emoji emoji-id=\"6030445631921721471\">⚡</tg-emoji> Админ панель", "callback_data": "adm_root", "parse_mode": "HTML"}])
     return {"inline_keyboard": kb}
 
 def admin_kb(uid):
     kb = [
-        [{"text": "Рассылка", "callback_data": "a_broad", "icon_custom_emoji_id": "6037622221625626773"},
-         {"text": "Очистка", "callback_data": "a_clean", "icon_custom_emoji_id": "6021792097454002931"}],
-        [{"text": "Добавить файл", "callback_data": "a_addfile", "icon_custom_emoji_id": "5805648413743651862"},
-         {"text": "ОП", "callback_data": "a_op", "icon_custom_emoji_id": "5962952497197748583"}],
-        [{"text": "Реклама", "callback_data": "a_ads", "icon_custom_emoji_id": "5904248647972820334"},
-         {"text": "Бан/Разбан", "callback_data": "a_ban", "icon_custom_emoji_id": "5776227595708273495"}],
-        [{"text": "Статистика", "callback_data": "a_stat", "icon_custom_emoji_id": "6032742198179532882"}]
+        [{"text": "<tg-emoji emoji-id=\"6037622221625626773\">📢</tg-emoji> Рассылка", "callback_data": "a_broad", "parse_mode": "HTML"},
+         {"text": "<tg-emoji emoji-id=\"6021792097454002931\">🧹</tg-emoji> Очистка", "callback_data": "a_clean", "parse_mode": "HTML"}],
+        [{"text": "<tg-emoji emoji-id=\"5805648413743651862\">📁</tg-emoji> Добавить файл", "callback_data": "a_addfile", "parse_mode": "HTML"},
+         {"text": "<tg-emoji emoji-id=\"5962952497197748583\">🔗</tg-emoji> ОП", "callback_data": "a_op", "parse_mode": "HTML"}],
+        [{"text": "<tg-emoji emoji-id=\"5904248647972820334\">📢</tg-emoji> Реклама", "callback_data": "a_ads", "parse_mode": "HTML"},
+         {"text": "<tg-emoji emoji-id=\"5776227595708273495\">🚫</tg-emoji> Бан/Разбан", "callback_data": "a_ban", "parse_mode": "HTML"}],
+        [{"text": "<tg-emoji emoji-id=\"6032742198179532882\">📊</tg-emoji> Статистика", "callback_data": "a_stat", "parse_mode": "HTML"}]
     ]
     if uid == OWNER_ID:
-        kb.append([{"text": "Управление админами", "callback_data": "a_mng", "icon_custom_emoji_id": "6032636795387121097"}])
-    kb.append([{"text": "Назад", "callback_data": "to_main"}])
+        kb.append([{"text": "<tg-emoji emoji-id=\"6032636795387121097\">👑</tg-emoji> Управление админами", "callback_data": "a_mng", "parse_mode": "HTML"}])
+    kb.append([{"text": "🔙 Назад", "callback_data": "to_main"}])
     return {"inline_keyboard": kb}
 
 def games_kb():
     return {
         "inline_keyboard": [
-            [{"text": "Standoff 2", "callback_data": "game_so2", "icon_custom_emoji_id": "5393134637667094112"}],
-            [{"text": "Pubg Mobile", "callback_data": "game_pubg", "icon_custom_emoji_id": "6073605466221451561"}],
-            [{"text": "Other Games", "callback_data": "game_other", "icon_custom_emoji_id": "6095674537196653589"}],
-            [{"text": "Назад", "callback_data": "to_main"}]
+            [{"text": "<tg-emoji emoji-id=\"5393134637667094112\">🎮</tg-emoji> Standoff 2", "callback_data": "game_so2", "parse_mode": "HTML"}],
+            [{"text": "<tg-emoji emoji-id=\"6073605466221451561\">🎮</tg-emoji> Pubg Mobile", "callback_data": "game_pubg", "parse_mode": "HTML"}],
+            [{"text": "<tg-emoji emoji-id=\"6095674537196653589\">🎮</tg-emoji> Other Games", "callback_data": "game_other", "parse_mode": "HTML"}],
+            [{"text": "🔙 Назад", "callback_data": "to_main"}]
         ]
     }
 
@@ -132,35 +158,38 @@ def files_kb(files):
     kb = []
     for f in files[:10]:
         kb.append([{"text": f"📄 {f['name'][:30]}", "callback_data": f"dl_{f['hash']}"}])
-    kb.append([{"text": "Назад", "callback_data": "menu_games"}])
+    kb.append([{"text": "🔙 Назад", "callback_data": "menu_games"}])
     return {"inline_keyboard": kb}
 
 def back_kb():
-    return {"inline_keyboard": [[{"text": "Назад", "callback_data": "to_main"}]]}
+    return {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "to_main"}]]}
 
 def perms_kb(target_id):
     return {
         "inline_keyboard": [
-            [{"text": "Добавить файл", "callback_data": f"perm_addfile_{target_id}", "icon_custom_emoji_id": "5805648413743651862"}],
-            [{"text": "Рассылка", "callback_data": f"perm_broad_{target_id}", "icon_custom_emoji_id": "6037622221625626773"}],
-            [{"text": "Все права", "callback_data": f"perm_all_{target_id}", "icon_custom_emoji_id": "6030445631921721471"}],
-            [{"text": "Отмена", "callback_data": "a_mng", "icon_custom_emoji_id": "6032636795387121097"}]
+            [{"text": "<tg-emoji emoji-id=\"5805648413743651862\">📁</tg-emoji> Добавить файл", "callback_data": f"perm_addfile_{target_id}", "parse_mode": "HTML"}],
+            [{"text": "<tg-emoji emoji-id=\"6037622221625626773\">📢</tg-emoji> Рассылка", "callback_data": f"perm_broad_{target_id}", "parse_mode": "HTML"}],
+            [{"text": "<tg-emoji emoji-id=\"6030445631921721471\">👑</tg-emoji> Все права", "callback_data": f"perm_all_{target_id}", "parse_mode": "HTML"}],
+            [{"text": "❌ Отмена", "callback_data": "a_mng"}]
         ]
     }
 
-def op_check_kb(link):
-    return {
-        "inline_keyboard": [
-            [{"text": "ПОДПИСАТЬСЯ", "url": link, "icon_custom_emoji_id": "5927118708873892465"}],
-            [{"text": "ПРОВЕРИТЬ", "callback_data": "op_check", "icon_custom_emoji_id": "5774022692642492953"}]
-        ]
-    }
+def op_check_kb(channel_id):
+    link = get_channel_link(channel_id)
+    if link:
+        return {
+            "inline_keyboard": [
+                [{"text": "<tg-emoji emoji-id=\"5927118708873892465\">✅</tg-emoji> ПОДПИСАТЬСЯ", "url": link, "parse_mode": "HTML"}],
+                [{"text": "<tg-emoji emoji-id=\"5774022692642492953\">🔄</tg-emoji> ПРОВЕРИТЬ", "callback_data": f"op_check_{channel_id}", "parse_mode": "HTML"}]
+            ]
+        }
+    return None
 
 def channel_check_kb():
     return {
         "inline_keyboard": [
-            [{"text": "ПОДПИСАТЬСЯ", "url": "https://t.me/OfficialPlutonium", "icon_custom_emoji_id": "5927118708873892465"}],
-            [{"text": "ПРОВЕРИТЬ", "callback_data": "channel_check", "icon_custom_emoji_id": "5774022692642492953"}]
+            [{"text": "<tg-emoji emoji-id=\"5927118708873892465\">✅</tg-emoji> ПОДПИСАТЬСЯ", "url": "https://t.me/OfficialPlutonium", "parse_mode": "HTML"}],
+            [{"text": "<tg-emoji emoji-id=\"5774022692642492953\">🔄</tg-emoji> ПРОВЕРИТЬ", "callback_data": "channel_check", "parse_mode": "HTML"}]
         ]
     }
 
@@ -182,35 +211,26 @@ def handle_cb(cb):
             cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
                    "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
                    "👇 Используй кнопки ниже для навигации")
-            api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": main_kb(uid)})
+            api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "parse_mode": "HTML", "reply_markup": main_kb(uid)})
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
         else:
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
         return
     
     # Проверка ОП
-    if data == "op_check":
-        op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
-        if op:
-            # Извлекаем ID канала из ссылки
-            channel_link = op['link'].split('/')[-1]
-            try:
-                # Пробуем получить ID канала
-                chat_info = api("getChat", {"chat_id": channel_link})
-                if chat_info.get('ok'):
-                    channel_id = chat_info['result']['id']
-                    if check_subscription(uid, channel_id):
-                        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
-                        cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
-                               "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
-                               "👇 Используй кнопки ниже для навигации")
-                        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": main_kb(uid)})
-                    else:
-                        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
-                else:
-                    api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Ошибка проверки", "show_alert": True})
-            except:
-                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Ошибка проверки", "show_alert": True})
+    if data.startswith("op_check_"):
+        try:
+            op_channel_id = int(data.split("_")[2])
+            if check_subscription(uid, op_channel_id):
+                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
+                cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
+                       "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
+                       "👇 Используй кнопки ниже для навигации")
+                api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": main_kb(uid)})
+            else:
+                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
+        except:
+            pass
         return
     
     if data == "to_main":
@@ -255,9 +275,16 @@ def handle_cb(cb):
         f_hash = data.split("_")[1]
         f = conn.execute("SELECT * FROM files WHERE hash = ?", (f_hash,)).fetchone()
         if f:
+            # Отправляем файл из канала-хранилища
             cap = (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {f['name']}\n"
                    f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
-            api("sendDocument", {"chat_id": cid, "document": f['file_id'], "caption": cap, "parse_mode": "HTML"})
+            api("copyMessage", {
+                "chat_id": cid,
+                "from_chat_id": STORAGE_CHANNEL_ID,
+                "message_id": f['file_id'],
+                "caption": cap,
+                "parse_mode": "HTML"
+            })
             conn.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (uid,))
             conn.execute("UPDATE files SET downloads = downloads + 1 WHERE hash = ?", (f_hash,))
             conn.commit()
@@ -298,9 +325,9 @@ def handle_cb(cb):
         if not has_perm(uid, "all"):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
             return
-        waiting[uid] = "op_link"
-        api("sendMessage", {"chat_id": cid, "text": "🔗 Создание ОП\n\nОтправь ссылку на канал/пост для обязательной подписки.\n\nПример: https://t.me/OfficialPlutonium"})
-        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь ссылку"})
+        waiting[uid] = "op_channel_id"
+        api("sendMessage", {"chat_id": cid, "text": "🔗 Создание ОП\n\nВведи ID канала для обязательной подписки.\n\nПример: -1001234567890\n\nЧтобы получить ID канала, добавь бота в канал и напиши /id"})
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Введи ID канала"})
     
     elif data == "a_ads":
         if not has_perm(uid, "all"):
@@ -373,7 +400,8 @@ def handle_cb(cb):
 # --- ОСНОВНОЙ ЦИКЛ ---
 def main():
     logger.info("🚀 Запуск Plutonium Bot")
-    logger.info(f"📢 Канал ID: {CHANNEL_ID}")
+    logger.info(f"📢 Канал подписки ID: {CHANNEL_ID}")
+    logger.info(f"💾 Канал хранения ID: {STORAGE_CHANNEL_ID}")
     api("deleteWebhook", {"drop_pending_updates": True})
     offset = 0
     
@@ -435,44 +463,56 @@ def main():
                     if '|' in name:
                         name = name.split('|')[0].strip()
                     
-                    f_hash = secrets.token_urlsafe(6)
-                    conn.execute("INSERT INTO files (hash, file_id, name, game, ts, created_by) VALUES (?, ?, ?, ?, ?, ?)",
-                                 (f_hash, m['document']['file_id'], name, game, int(time.time()), uid))
-                    conn.commit()
+                    # Копируем файл в канал-хранилище
+                    try:
+                        # Копируем сообщение с файлом в канал-хранилище
+                        copy_result = api("copyMessage", {
+                            "chat_id": STORAGE_CHANNEL_ID,
+                            "from_chat_id": chat_id,
+                            "message_id": m['message_id']
+                        })
+                        
+                        if copy_result.get('ok'):
+                            stored_msg_id = copy_result['result']['message_id']
+                            file_hash = secrets.token_urlsafe(6)
+                            conn.execute("INSERT INTO files (hash, file_id, name, game, ts, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+                                         (file_hash, stored_msg_id, name, game, int(time.time()), uid))
+                            conn.commit()
+                            
+                            file_link = f"https://t.me/plutoniumfilesBot?start={file_hash}"
+                            cap = (f"✅ Файл добавлен!\n\n"
+                                   f"📄 Название: {name}\n"
+                                   f"🎮 Игра: {game.upper()}\n"
+                                   f"🔗 Ссылка: {file_link}\n"
+                                   f"📥 Скачиваний: 0\n\n"
+                                   f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> При выдаче файла будет:\n"
+                                   f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
+                            api("sendMessage", {"chat_id": uid, "text": cap, "parse_mode": "HTML"})
+                        else:
+                            api("sendMessage", {"chat_id": uid, "text": "❌ Ошибка сохранения файла в хранилище"})
+                    except Exception as e:
+                        logger.error(f"Save to storage error: {e}")
+                        api("sendMessage", {"chat_id": uid, "text": f"❌ Ошибка: {e}"})
                     
-                    file_link = f"https://t.me/plutoniumfilesBot?start={f_hash}"
-                    cap = (f"✅ Файл добавлен!\n\n"
-                           f"📄 Название: {name}\n"
-                           f"🎮 Игра: {game.upper()}\n"
-                           f"🔗 Ссылка: {file_link}\n"
-                           f"📥 Скачиваний: 0\n\n"
-                           f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> При выдаче файла будет:\n"
-                           f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
-                    api("sendMessage", {"chat_id": uid, "text": cap, "parse_mode": "HTML"})
                     waiting[uid] = None
                     continue
                 
-                # ОП - получение ссылки
-                elif waiting.get(uid) == "op_link" and text:
-                    link = text.strip()
-                    if link.startswith("https://t.me/"):
-                        waiting[uid] = "op_target"
-                        waiting[f"{uid}_link"] = link
-                        api("sendMessage", {"chat_id": uid, "text": "🔢 Введи количество пользователей для ОП:\n\nПример: 100"})
-                    else:
-                        api("sendMessage", {"chat_id": uid, "text": "❌ Отправь корректную ссылку!\n\nПример: https://t.me/OfficialPlutonium"})
-                    continue
-                
-                elif waiting.get(uid) == "op_target" and text.isdigit():
-                    target = int(text)
-                    link = waiting.get(f"{uid}_link", "")
-                    conn.execute("UPDATE op_settings SET active = 0")
-                    conn.execute("INSERT INTO op_settings (link, target, current, active) VALUES (?, ?, 0, 1)", (link, target))
-                    conn.commit()
-                    api("sendMessage", {"chat_id": uid, "text": f"✅ ОП создана!\n\nСсылка: {link}\nЦель: {target} пользователей\n\nТеперь новые пользователи должны подписаться для доступа"})
+                # ОП - получение ID канала
+                elif waiting.get(uid) == "op_channel_id" and text:
+                    try:
+                        channel_id = int(text.strip())
+                        link = get_channel_link(channel_id)
+                        if link:
+                            conn.execute("UPDATE op_settings SET active = 0")
+                            conn.execute("INSERT INTO op_settings (channel_id, target, current, active, link) VALUES (?, 0, 0, 1, ?)", 
+                                        (channel_id, link))
+                            conn.commit()
+                            api("sendMessage", {"chat_id": uid, "text": f"✅ ОП создана!\n\nКанал ID: {channel_id}\nСсылка: {link}\n\nТеперь новые пользователи должны подписаться для доступа"})
+                        else:
+                            api("sendMessage", {"chat_id": uid, "text": "❌ Не удалось получить ссылку на канал. Убедись, что бот добавлен в канал."})
+                    except:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Отправь корректный ID канала!\n\nПример: -1001234567890"})
                     waiting[uid] = None
-                    if f"{uid}_link" in waiting:
-                        del waiting[f"{uid}_link"]
                     continue
                 
                 # Реклама
@@ -589,7 +629,7 @@ def main():
                 
                 # /start
                 if text == "/start":
-                    # Проверка подписки на канал по числовому ID
+                    # Проверка подписки на канал
                     if not check_subscription(uid, CHANNEL_ID):
                         cap = ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
                                "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись на канал @OfficialPlutonium для доступа!")
@@ -600,25 +640,20 @@ def main():
                     # Проверка ОП
                     op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
                     if op:
-                        channel_link = op['link'].split('/')[-1]
-                        try:
-                            chat_info = api("getChat", {"chat_id": channel_link})
-                            if chat_info.get('ok'):
-                                op_channel_id = chat_info['result']['id']
-                                if not check_subscription(uid, op_channel_id):
-                                    cap = ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
-                                           "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись для доступа!")
-                                    api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": cap, "parse_mode": "HTML", 
-                                                      "reply_markup": op_check_kb(op['link'])})
-                                    continue
-                                
-                                new_cur = op['current'] + 1
-                                conn.execute("UPDATE op_settings SET current = ? WHERE id = ?", (new_cur, op['id']))
-                                if new_cur >= op['target']:
-                                    conn.execute("UPDATE op_settings SET active = 0 WHERE id = ?", (op['id'],))
-                                conn.commit()
-                        except Exception as e:
-                            logger.error(f"OP check error: {e}")
+                        if not check_subscription(uid, op['channel_id']):
+                            link = get_channel_link(op['channel_id'])
+                            if link:
+                                cap = ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
+                                       "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись для доступа!")
+                                api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": cap, "parse_mode": "HTML", 
+                                                  "reply_markup": op_check_kb(op['channel_id'])})
+                            continue
+                        
+                        new_cur = op['current'] + 1
+                        conn.execute("UPDATE op_settings SET current = ? WHERE id = ?", (new_cur, op['id']))
+                        if new_cur >= op['target']:
+                            conn.execute("UPDATE op_settings SET active = 0 WHERE id = ?", (op['id'],))
+                        conn.commit()
                     
                     cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
                            "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
@@ -632,7 +667,13 @@ def main():
                     if f:
                         cap = (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {f['name']}\n"
                                f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
-                        api("sendDocument", {"chat_id": uid, "document": f['file_id'], "caption": cap, "parse_mode": "HTML"})
+                        api("copyMessage", {
+                            "chat_id": uid,
+                            "from_chat_id": STORAGE_CHANNEL_ID,
+                            "message_id": f['file_id'],
+                            "caption": cap,
+                            "parse_mode": "HTML"
+                        })
                         conn.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (uid,))
                         conn.execute("UPDATE files SET downloads = downloads + 1 WHERE hash = ?", (f_hash,))
                         conn.commit()
