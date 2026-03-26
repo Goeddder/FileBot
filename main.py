@@ -220,17 +220,19 @@ def get_profile_text(uid, first_name, username, downloads):
 def get_file_footer(name, description):
     if description:
         return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}\n"
-                f"📝 {description}")
+                f"📝 {description}\n\n"
+                f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
     else:
-        return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}")
+        return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}\n\n"
+                f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
 
 def get_add_file_success(name, description, game, file_link):
-    return (f"✅ Файл добавлен!\n\n"
-            f"📄 Название: {name}\n"
-            f"📝 Описание: {description}\n"
-            f"🎮 Игра: {game.upper()}\n"
-            f"🔗 Ссылка: {file_link}\n"
-            f"📥 Скачиваний: 0\n\n"
+    return (f"<tg-emoji emoji-id=\"6039391078136681499\">✅</tg-emoji> Файл добавлен!\n\n"
+            f"<tg-emoji emoji-id=\"5257965174979042426\">📄</tg-emoji> Название: {name}\n"
+            f"<tg-emoji emoji-id=\"5938413566624272793\">📝</tg-emoji> Описание: {description}\n"
+            f"<tg-emoji emoji-id=\"6028171274939797252\">🎮</tg-emoji> Игра: {game.upper()}\n"
+            f"<tg-emoji emoji-id=\"5974220038956124904\">🔗</tg-emoji> Ссылка: {file_link}\n"
+            f"<tg-emoji emoji-id=\"6039573425268201570\">📥</tg-emoji> Скачиваний: 0\n\n"
             f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> При выдаче файла будет:\n"
             f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
 
@@ -378,7 +380,6 @@ def handle_cb(cb):
             cap = f"🎮 {game_name.upper()}\n\n📂 Файлы:"
             api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": files_kb(files)})
         else:
-            # Если файлов нет - просто показываем пустую категорию
             cap = f"🎮 {game_name.upper()}\n\n📂 Файлов пока нет"
             api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": back_kb()})
         return
@@ -589,7 +590,6 @@ def main():
                     elif "#other" in cap.lower():
                         game = "other"
                     
-                    # Парсим название и описание
                     parts = cap.split('|')
                     name = parts[0].strip() if len(parts) > 0 else "File"
                     description = parts[2].strip() if len(parts) > 2 else ""
@@ -637,7 +637,7 @@ def main():
                     waiting[uid] = None
                     continue
                 
-                # Реклама - сохраняем с entities
+                # Реклама
                 elif waiting.get(uid) == "ad_post" and (text or m.get('caption')):
                     waiting[uid] = "ad_time"
                     msg_data = {
@@ -686,7 +686,7 @@ def main():
                         api("sendMessage", {"chat_id": uid, "text": "❌ Введи число от 1 до 72"})
                     continue
                 
-                # Бан/Разбан - первый шаг
+                # Бан/Разбан
                 elif waiting.get(uid) == "ban_user" and text:
                     target = text.strip().replace('@', '')
                     try:
@@ -708,7 +708,7 @@ def main():
                         waiting[uid] = None
                     continue
                 
-                # Рассылка - с сохранением entities
+                # Рассылка
                 elif waiting.get(uid) == "broadcast" and text:
                     if text == "/cancel":
                         waiting[uid] = None
@@ -791,14 +791,12 @@ def main():
                 elif text.startswith("/start "):
                     f_hash = text.split(" ")[1]
                     
-                    # Проверяем, не обрабатывали ли уже этот хеш
                     if f_hash in processed_hashes:
                         continue
                     processed_hashes.add(f_hash)
                     
                     f = conn.execute("SELECT * FROM files WHERE hash = ?", (f_hash,)).fetchone()
                     if f:
-                               # Отправляем "Отправляю файл!"
                         api("sendMessage", {"chat_id": uid, "text": "<tg-emoji emoji-id=\"6037373985400819577\">📤</tg-emoji> Отправляю файл!", "parse_mode": "HTML"})
                         
                         cap = get_file_footer(f['name'], f['description'])
