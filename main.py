@@ -5,14 +5,14 @@ import json
 import logging
 import urllib.request
 import time
-import re
 
 # --- НАСТРОЙКИ ---
 BOT_TOKEN = "8071432823:AAHh27N0UVMpt3grjhL0XX_XypAncrF8Mi8"
 OWNER_ID = 1471307057
 CHANNEL_URL = "https://t.me/OfficialPlutonium"
-CHANNEL_ID = "@OfficialPlutonium" # Обязательно с @ для публичных каналов
+CHANNEL_ID = "@OfficialPlutonium"
 DB_PATH = "files.db"
+PHOTO_URL = "https://files.catbox.moe/jdtlab.jpg"
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 logging.basicConfig(level=logging.INFO)
@@ -37,33 +37,20 @@ def api(method, data=None):
 # --- БАЗА ДАННЫХ ---
 conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
 conn.row_factory = sqlite3.Row
-
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS files (
-        hash TEXT PRIMARY KEY, file_id TEXT, name TEXT, game TEXT, downloads INTEGER DEFAULT 0
-    )
-""")
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, 
-        is_premium INTEGER DEFAULT 0, invited_by INTEGER DEFAULT 0, 
-        total_invites INTEGER DEFAULT 0, total_downloads INTEGER DEFAULT 0
-    )
-""")
-conn.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)")
-conn.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (OWNER_ID,))
+conn.execute("CREATE TABLE IF NOT EXISTS files (hash TEXT PRIMARY KEY, file_id TEXT, name TEXT, game TEXT, downloads INTEGER DEFAULT 0)")
+conn.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, total_downloads INTEGER DEFAULT 0)")
 conn.commit()
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ---
-def send_message(chat_id, text, reply_markup=None):
-    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+def send_photo(chat_id, caption, reply_markup=None):
+    data = {"chat_id": chat_id, "photo": PHOTO_URL, "caption": caption, "parse_mode": "HTML"}
     if reply_markup: data["reply_markup"] = json.dumps(reply_markup)
-    return api("sendMessage", data)
+    return api("sendPhoto", data)
 
-def edit_message(chat_id, message_id, text, reply_markup=None):
-    data = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
+def edit_caption(chat_id, message_id, caption, reply_markup=None):
+    data = {"chat_id": chat_id, "message_id": message_id, "caption": caption, "parse_mode": "HTML"}
     if reply_markup: data["reply_markup"] = json.dumps(reply_markup)
-    return api("editMessageText", data)
+    return api("editMessageCaption", data)
 
 def answer_callback(callback_id, text=None, show_alert=False):
     data = {"callback_query_id": callback_id}
@@ -77,103 +64,70 @@ def check_subscription(user_id):
         return res['result']['status'] in ('member', 'administrator', 'creator')
     return False
 
-def is_admin(user_id):
-    return conn.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,)).fetchone() is not None
-
-def get_user(user_id):
-    return conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
-
-# --- КЛАВИАТУРЫ ---
-def main_keyboard(is_p=False):
-    key = "📁 Игры" if not is_p else "<tg-emoji emoji-id=\"5875008416132370818\">📁</tg-emoji> Игры"
-    return {
-        "keyboard": [[{"text": key}], [{"text": "👋 Профиль"}, {"text": "🔗 Рефералка"}], [{"text": "❓ Помощь"}]],
-        "resize_keyboard": True
-    }
-
-def subscribe_keyboard(is_p=False):
+# --- КЛАВИАТУРЫ (ИНЛАЙН) ---
+def main_inline_kb():
     return {
         "inline_keyboard": [
-            [{"text": "📢 ПОДПИСАТЬСЯ", "url": CHANNEL_URL}],
-            [{"text": "🔄 ПРОВЕРИТЬ", "callback_data": "check_sub"}]
+            [{"text": "📁 Игры", "callback_data": "menu_games"}],
+            [{"text": "👤 Профиль", "callback_data": "menu_profile"}],
+            [{"text": "❓ Помощь", "callback_data": "menu_help"}]
         ]
     }
 
-def admin_keyboard(is_p=False):
+def subscribe_inline_kb():
     return {
-        "keyboard": [[{"text": "📁 Добавить чит"}, {"text": "📋 Список читов"}], [{"text": "📊 Статистика"}, {"text": "🔙 Главное меню"}]],
-        "resize_keyboard": True
+        "inline_keyboard": [
+            [{"text": "ПОДПИСАТЬСЯ", "url": CHANNEL_URL}],
+            [{"text": "ПРОВЕРИТЬ", "callback_data": "check_sub"}]
+        ]
     }
 
 # --- ОБРАБОТЧИКИ ---
-waiting_for_file = {}
-
 def process_callback(cb_id, chat_id, message_id, data, user_id):
-    u = get_user(user_id)
-    is_p = bool(u['is_premium']) if u else False
+    u = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
     
     if data == "check_sub":
         if check_subscription(user_id):
-            first_name = u['first_name'] if u else 'Пользователь'
-            if is_p:
-                text = f"<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> **Привет, {first_name}!**\n\n<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> **Доступ открыт!**"
-            else:
-                text = f"👋 **Привет, {first_name}!**\n\n🙂 **Доступ открыт! Используй меню ниже.**"
-            
-            kb = admin_keyboard(is_p) if is_admin(user_id) else main_keyboard(is_p)
-            answer_callback(cb_id, "✅ Подписка подтверждена!")
-            edit_message(chat_id, message_id, text, kb)
+            answer_callback(cb_id, "✅ Доступ открыт!")
+            text = (
+                "<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> **Привет!**\n"
+                "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> **Я храню файлы с канала** @OfficialPlutonium\n"
+                "<tg-emoji emoji-id=\"5875008416132370818\">📁</tg-emoji> **Используй кнопки ниже для навигации**"
+            )
+            edit_caption(chat_id, message_id, text, main_inline_kb())
         else:
-            answer_callback(cb_id, "❌ Вы всё еще не подписаны!", show_alert=True)
-            
+            answer_callback(cb_id, "❌ Вы не подписаны!", True)
+
+    elif data == "menu_profile":
+        text = (
+            f"<tg-emoji emoji-id=\"6032693626394382504\">👤</tg-emoji> **Профиль**\n"
+            f"<tg-emoji emoji-id=\"5886505193180239900\">🆔</tg-emoji> ID: `{user_id}`\n"
+            f"<tg-emoji emoji-id=\"5879770735999717115\">📛</tg-emoji> Имя: {u['first_name']}\n"
+            f"<tg-emoji emoji-id=\"5814247475141153332\">🔖</tg-emoji> Username: @{u['username']}\n"
+            f"<tg-emoji emoji-id=\"6039802767931871481\">📥</tg-emoji> Файлов получено: {u['total_downloads']}"
+        )
+        edit_caption(chat_id, message_id, text, {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "back_main"}]]})
+
+    elif data == "back_main":
+        text = "👋 Привет!\n🙂 Я храню файлы с канала @OfficialPlutonium\n👇 Используй кнопки ниже"
+        edit_caption(chat_id, message_id, text, main_inline_kb())
+
     elif data.startswith("file_"):
         f_hash = data.split("_")[1]
         f = conn.execute("SELECT * FROM files WHERE hash = ?", (f_hash,)).fetchone()
         if f:
-            api("sendDocument", {"chat_id": chat_id, "document": f['file_id'], "caption": f"✅ {f['name']}"})
-            answer_callback(cb_id, "🚀 Отправлено!")
-        else:
-            answer_callback(cb_id, "❌ Файл не найден", True)
-
-def process_text(chat_id, user_id, text, is_p):
-    if text == "👋 Профиль":
-        u = get_user(user_id)
-        msg = f"👤 **Профиль**\n\nID: `{user_id}`\nПриглашений: {u['total_invites']}\nСкачиваний: {u['total_downloads']}"
-        send_message(chat_id, msg)
-    
-    elif text == "📁 Игры" or "Игры" in text:
-        games = conn.execute("SELECT DISTINCT game FROM files").fetchall()
-        if not games:
-            send_message(chat_id, "📭 Пока читов нет.")
-            return
-        btns = [[{"text": f"🎮 {g['game']}"}] for g in games]
-        btns.append([{"text": "🔙 Главное меню"}])
-        send_message(chat_id, "🎮 Выбери игру:", {"keyboard": btns, "resize_keyboard": True})
-
-    elif text.startswith("🎮"):
-        g_name = text.replace("🎮 ", "")
-        files = conn.execute("SELECT * FROM files WHERE game = ?", (g_name,)).fetchall()
-        kb = {"inline_keyboard": [[{"text": f"📄 {f['name']}", "callback_data": f"file_{f['hash']}"}] for f in files]}
-        send_message(chat_id, f"Читы для <b>{g_name}</b>:", kb)
-
-    elif is_admin(user_id):
-        if text == "📁 Добавить чит":
-            waiting_for_file[user_id] = True
-            send_message(chat_id, "Пришли файл с подписью: <code>Название | Игра</code>")
-        elif text == "📊 Статистика":
-            u_c = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            f_c = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-            send_message(chat_id, f"📊 Юзеров: {u_c}\n📁 Файлов: {f_c}")
-        elif text == "🔙 Главное меню":
-            send_message(chat_id, "Главное меню:", admin_keyboard(is_p))
+            conn.execute("UPDATE users SET total_downloads = total_downloads + 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            caption = (
+                f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> **Ваш Файл: {f['name']}**\n"
+                f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> **Buy plutonium - @PlutoniumllcBot**"
+            )
+            api("sendDocument", {"chat_id": chat_id, "document": f['file_id'], "caption": caption, "parse_mode": "HTML"})
+            answer_callback(cb_id, "✅ Файл отправлен!")
 
 # --- MAIN ---
 def main():
-    logger.info("🚀 Запуск Plutonium Bot")
-    # Исправляем 409 Conflict: удаляем вебхук
     api("deleteWebhook", {"drop_pending_updates": True})
-    time.sleep(1)
-
     offset = 0
     while True:
         try:
@@ -181,7 +135,7 @@ def main():
             if upd.get('ok') and upd.get('result'):
                 for u in upd['result']:
                     offset = u['update_id'] + 1
-
+                    
                     if 'callback_query' in u:
                         cb = u['callback_query']
                         process_callback(cb['id'], cb['message']['chat']['id'], cb['message']['message_id'], cb['data'], cb['from']['id'])
@@ -189,40 +143,25 @@ def main():
 
                     if 'message' in u:
                         m = u['message']
-                        chat_id = m['chat']['id']
                         user_id = m['from']['id']
-                        is_p = m['from'].get('is_premium', False)
+                        name = m['from'].get('first_name', 'User')
+                        uname = m['from'].get('username', 'none')
 
-                        # Регистрация
-                        if not get_user(user_id):
-                            conn.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, is_premium) VALUES (?, ?, ?, ?)", 
-                                         (user_id, m['from'].get('username', ''), m['from'].get('first_name', ''), 1 if is_p else 0))
-                            conn.commit()
+                        conn.execute("INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)", (user_id, uname, name))
+                        conn.commit()
 
                         if 'text' in m and m['text'].startswith('/start'):
                             if not check_subscription(user_id):
-                                send_message(chat_id, "🔒 Подпишись на канал, чтобы пользоваться ботом!", subscribe_keyboard(is_p))
+                                cap = (
+                                    f"<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> **Привет, {name}!**\n"
+                                    f"<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> **Подпишись на канал для доступа к читам.**"
+                                )
+                                send_photo(m['chat']['id'], cap, subscribe_inline_kb())
                             else:
-                                kb = admin_keyboard(is_p) if is_admin(user_id) else main_keyboard(is_p)
-                                send_message(chat_id, "👋 Привет! Ты уже подписан. Пользуйся!", kb)
-
-                        elif 'document' in m and waiting_for_file.get(user_id):
-                            waiting_for_file[user_id] = False
-                            cap = m.get('caption', 'Файл | Без игры')
-                            n, g = [x.strip() for x in cap.split('|')] if '|' in cap else (cap, "Прочее")
-                            h = secrets.token_urlsafe(6)
-                            conn.execute("INSERT INTO files (hash, file_id, name, game) VALUES (?, ?, ?, ?)", (h, m['document']['file_id'], n, g))
-                            conn.commit()
-                            send_message(chat_id, f"✅ Чит {n} добавлен!")
-
-                        elif 'text' in m:
-                            process_text(chat_id, user_id, m['text'], is_p)
-
+                                cap = "👋 Привет!\n🙂 Я храню файлы с канала @OfficialPlutonium\n👇 Используй кнопки ниже"
+                                send_photo(m['chat']['id'], cap, main_inline_kb())
             time.sleep(0.5)
-        except Exception as e:
-            logger.error(f"Error: {e}")
-            time.sleep(3)
+        except: time.sleep(5)
 
 if __name__ == "__main__":
     main()
-    
