@@ -16,10 +16,7 @@ STORAGE_CHANNEL = os.environ.get("STORAGE_CHANNEL", "IllyaTelegram")
 DB_PATH = "files.db"
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- БАЗА ДАННЫХ ---
@@ -61,7 +58,6 @@ conn.execute("""
 """)
 conn.execute("INSERT OR IGNORE INTO admins (user_id, added_by) VALUES (?, ?)", (OWNER_ID, OWNER_ID))
 conn.commit()
-logger.info("✅ База данных готова")
 
 # --- ФУНКЦИИ BOT API ---
 def api(method, data=None):
@@ -76,7 +72,7 @@ def api(method, data=None):
         with urllib.request.urlopen(req, timeout=30) as response:
             return json.loads(response.read().decode())
     except Exception as e:
-        logger.error(f"API error in {method}: {e}")
+        logger.error(f"API error: {e}")
         return {'ok': False}
 
 def send_message(chat_id, text, reply_markup=None):
@@ -141,7 +137,6 @@ def save_user(user_id, username, first_name, last_name, is_premium, inviter_id=N
     )
     if inviter_id and inviter_id != user_id:
         conn.execute("UPDATE users SET total_invites = total_invites + 1 WHERE user_id = ?", (inviter_id,))
-        conn.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (inviter_id, user_id))
     conn.commit()
 
 def get_user(user_id):
@@ -190,7 +185,7 @@ def get_all_files():
 waiting_for_file = {}
 waiting_for_broadcast = {}
 
-# --- КЛАВИАТУРЫ (с прямыми ID эмодзи, премиум не трогаем) ---
+# --- КЛАВИАТУРЫ ---
 def main_keyboard(is_premium=False):
     if is_premium:
         return {
@@ -226,16 +221,8 @@ def subscribe_keyboard(is_premium=False):
     if is_premium:
         return {
             "inline_keyboard": [
-                [{
-                    "text": "ПОДПИСАТЬСЯ",
-                    "url": CHANNEL_URL,
-                    "icon_custom_emoji_id": "5927118708873892465"
-                }],
-                [{
-                    "text": "ПРОВЕРИТЬ",
-                    "callback_data": "check_sub",
-                    "icon_custom_emoji_id": "5774022692642492953"
-                }]
+                [{"text": "ПОДПИСАТЬСЯ", "url": CHANNEL_URL, "icon_custom_emoji_id": "5927118708873892465"}],
+                [{"text": "ПРОВЕРИТЬ", "callback_data": "check_sub", "icon_custom_emoji_id": "5774022692642492953"}]
             ]
         }
     else:
@@ -258,7 +245,7 @@ def games_keyboard(games, is_premium=False):
     buttons.append([{"text": "🔙 Главное меню"}])
     return {"keyboard": buttons, "resize_keyboard": True}
 
-def cheats_keyboard(cheats, game, is_premium=False):
+def cheats_keyboard(cheats):
     if not cheats:
         return None
     buttons = []
@@ -269,10 +256,7 @@ def cheats_keyboard(cheats, game, is_premium=False):
 
 def file_footer(is_premium=False):
     if is_premium:
-        return (
-            f"\n\n<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> **Ваш Файл**\n"
-            f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> **Buy plutonium** - @PlutoniumllcBot"
-        )
+        return f"\n\n<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> **Ваш Файл**\n<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> **Buy plutonium** - @PlutoniumllcBot"
     else:
         return "\n\n📤 **Ваш Файл**\n🏪 **Buy plutonium** - @PlutoniumllcBot"
 
@@ -365,7 +349,7 @@ def process_message(chat_id, user_id, text, username, first_name, last_name, is_
                 game = re.sub(r'<[^>]+>', '', game).strip()
             files = get_files_by_game(game)
             if files:
-                keyboard = cheats_keyboard(files, game, is_premium)
+                keyboard = cheats_keyboard(files)
                 send_message(chat_id, f"🎮 **{game}**\n\nВыбери чит:", keyboard)
             else:
                 send_message(chat_id, f"❌ Для игры {game} пока нет читов.", games_keyboard(get_all_games(), is_premium))
@@ -434,11 +418,9 @@ def process_message(chat_id, user_id, text, username, first_name, last_name, is_
         logger.error(f"Process error: {e}")
 
 def process_callback(callback_id, chat_id, message_id, data, user_id, is_premium):
-    logger.info(f"🔔 Callback: data={data}, user_id={user_id}")
     try:
         if data == "check_sub":
             subscribed = check_subscription(user_id)
-            logger.info(f"Subscription result: {subscribed}")
             if subscribed:
                 user_data = get_user(user_id)
                 first_name = user_data.get('first_name', 'Пользователь') if user_data else 'Пользователь'
@@ -454,7 +436,7 @@ def process_callback(callback_id, chat_id, message_id, data, user_id, is_premium
                 edit_message(chat_id, message_id, text, keyboard)
                 answer_callback(callback_id, "✅ Подписка подтверждена!")
             else:
-                answer_callback(callback_id, "❌ Вы еще не подписались!", show_alert=True)
+                answer_callback(callback_id, "❌ Вы еще не подписались!", True)
         elif data.startswith("file_"):
             file_hash = data.split("_")[1]
             file_data = conn.execute("SELECT file_id, name FROM files WHERE hash = ?", (file_hash,)).fetchone()
@@ -547,11 +529,9 @@ def main():
                         last_name = user.get('last_name', '')
                         is_premium = user.get('is_premium', False)
 
-                        # Сохраняем нового пользователя
                         if not get_user(user_id):
                             save_user(user_id, username, first_name, last_name, is_premium)
 
-                        # /start
                         if 'text' in msg and msg['text'].startswith('/start'):
                             args = msg['text'].replace('/start', '').strip()
                             inviter_id = None
@@ -588,7 +568,6 @@ def main():
                                 keyboard = admin_keyboard(is_premium) if is_admin(user_id) else main_keyboard(is_premium)
                                 send_message(chat_id, text, keyboard)
 
-                        # Текст
                         elif 'text' in msg:
                             process_message(
                                 chat_id, user_id, msg['text'],
@@ -596,7 +575,6 @@ def main():
                                 is_premium, msg['message_id']
                             )
 
-                        # Документ
                         elif 'document' in msg:
                             file_id = msg['document']['file_id']
                             file_name = msg['document'].get('file_name', 'file')
