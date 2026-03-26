@@ -15,6 +15,9 @@ PHOTO_URL = "https://files.catbox.moe/jdtlab.jpg"
 DB_PATH = "plutonium_full.db"
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# ID канала OfficialPlutonium (числовой)
+CHANNEL_ID = -1003607014773
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -76,20 +79,18 @@ def ad_cleaner():
 threading.Thread(target=ad_cleaner, daemon=True).start()
 
 # --- ПРОВЕРКА ПОДПИСКИ (ИСПРАВЛЕНА) ---
-def check_subscription(user_id, channel):
-    """Проверка подписки пользователя на канал"""
+def check_subscription(user_id, channel_id):
+    """Проверка подписки пользователя на канал по числовому ID"""
     try:
-        # Убираем @ если есть
-        chat_id = channel.replace('@', '')
-        result = api("getChatMember", {"chat_id": chat_id, "user_id": user_id})
+        result = api("getChatMember", {"chat_id": channel_id, "user_id": user_id})
         if result.get('ok'):
             status = result['result']['status']
-            logger.info(f"User {user_id} status in {chat_id}: {status}")
+            logger.info(f"User {user_id} status in channel {channel_id}: {status}")
             return status in ['member', 'administrator', 'creator']
         return False
     except Exception as e:
         logger.error(f"Check subscription error: {e}")
-        return True  # При ошибке пропускаем проверку
+        return False
 
 # --- КЛАВИАТУРЫ ---
 def main_kb(uid):
@@ -177,7 +178,7 @@ def handle_cb(cb):
     
     # Проверка подписки на канал
     if data == "channel_check":
-        if check_subscription(uid, "OfficialPlutonium"):
+        if check_subscription(uid, CHANNEL_ID):
             cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
                    "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
                    "👇 Используй кнопки ниже для навигации")
@@ -191,14 +192,25 @@ def handle_cb(cb):
     if data == "op_check":
         op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
         if op:
-            if check_subscription(uid, op['link'].split('/')[-1]):
-                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
-                cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
-                       "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
-                       "👇 Используй кнопки ниже для навигации")
-                api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": main_kb(uid)})
-            else:
-                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
+            # Извлекаем ID канала из ссылки
+            channel_link = op['link'].split('/')[-1]
+            try:
+                # Пробуем получить ID канала
+                chat_info = api("getChat", {"chat_id": channel_link})
+                if chat_info.get('ok'):
+                    channel_id = chat_info['result']['id']
+                    if check_subscription(uid, channel_id):
+                        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
+                        cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
+                               "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
+                               "👇 Используй кнопки ниже для навигации")
+                        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": main_kb(uid)})
+                    else:
+                        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
+                else:
+                    api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Ошибка проверки", "show_alert": True})
+            except:
+                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Ошибка проверки", "show_alert": True})
         return
     
     if data == "to_main":
@@ -361,6 +373,7 @@ def handle_cb(cb):
 # --- ОСНОВНОЙ ЦИКЛ ---
 def main():
     logger.info("🚀 Запуск Plutonium Bot")
+    logger.info(f"📢 Канал ID: {CHANNEL_ID}")
     api("deleteWebhook", {"drop_pending_updates": True})
     offset = 0
     
@@ -576,8 +589,8 @@ def main():
                 
                 # /start
                 if text == "/start":
-                    # Проверка подписки на канал
-                    if not check_subscription(uid, "OfficialPlutonium"):
+                    # Проверка подписки на канал по числовому ID
+                    if not check_subscription(uid, CHANNEL_ID):
                         cap = ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
                                "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись на канал @OfficialPlutonium для доступа!")
                         api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": cap, "parse_mode": "HTML", 
@@ -587,18 +600,25 @@ def main():
                     # Проверка ОП
                     op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
                     if op:
-                        if not check_subscription(uid, op['link'].split('/')[-1]):
-                            cap = ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
-                                   "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись для доступа!")
-                            api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": cap, "parse_mode": "HTML", 
-                                              "reply_markup": op_check_kb(op['link'])})
-                            continue
-                        
-                        new_cur = op['current'] + 1
-                        conn.execute("UPDATE op_settings SET current = ? WHERE id = ?", (new_cur, op['id']))
-                        if new_cur >= op['target']:
-                            conn.execute("UPDATE op_settings SET active = 0 WHERE id = ?", (op['id'],))
-                        conn.commit()
+                        channel_link = op['link'].split('/')[-1]
+                        try:
+                            chat_info = api("getChat", {"chat_id": channel_link})
+                            if chat_info.get('ok'):
+                                op_channel_id = chat_info['result']['id']
+                                if not check_subscription(uid, op_channel_id):
+                                    cap = ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
+                                           "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись для доступа!")
+                                    api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": cap, "parse_mode": "HTML", 
+                                                      "reply_markup": op_check_kb(op['link'])})
+                                    continue
+                                
+                                new_cur = op['current'] + 1
+                                conn.execute("UPDATE op_settings SET current = ? WHERE id = ?", (new_cur, op['id']))
+                                if new_cur >= op['target']:
+                                    conn.execute("UPDATE op_settings SET active = 0 WHERE id = ?", (op['id'],))
+                                conn.commit()
+                        except Exception as e:
+                            logger.error(f"OP check error: {e}")
                     
                     cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
                            "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
