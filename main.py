@@ -75,6 +75,22 @@ def ad_cleaner():
 
 threading.Thread(target=ad_cleaner, daemon=True).start()
 
+# --- ПРОВЕРКА ПОДПИСКИ (ИСПРАВЛЕНА) ---
+def check_subscription(user_id, channel):
+    """Проверка подписки пользователя на канал"""
+    try:
+        # Убираем @ если есть
+        chat_id = channel.replace('@', '')
+        result = api("getChatMember", {"chat_id": chat_id, "user_id": user_id})
+        if result.get('ok'):
+            status = result['result']['status']
+            logger.info(f"User {user_id} status in {chat_id}: {status}")
+            return status in ['member', 'administrator', 'creator']
+        return False
+    except Exception as e:
+        logger.error(f"Check subscription error: {e}")
+        return True  # При ошибке пропускаем проверку
+
 # --- КЛАВИАТУРЫ ---
 def main_kb(uid):
     kb = [
@@ -139,20 +155,16 @@ def op_check_kb(link):
         ]
     }
 
+def channel_check_kb():
+    return {
+        "inline_keyboard": [
+            [{"text": "ПОДПИСАТЬСЯ", "url": "https://t.me/OfficialPlutonium", "icon_custom_emoji_id": "5927118708873892465"}],
+            [{"text": "ПРОВЕРИТЬ", "callback_data": "channel_check", "icon_custom_emoji_id": "5774022692642492953"}]
+        ]
+    }
+
 # --- ХРАНИЛИЩА ---
 waiting = {}
-ban_step = {}
-
-# --- ПРОВЕРКА ПОДПИСКИ ---
-def check_subscription(user_id, channel):
-    try:
-        result = api("getChatMember", {"chat_id": channel, "user_id": user_id})
-        if result.get('ok'):
-            status = result['result']['status']
-            return status in ['member', 'administrator', 'creator']
-        return False
-    except:
-        return False
 
 # --- ОБРАБОТКА CALLBACK ---
 def handle_cb(cb):
@@ -162,6 +174,32 @@ def handle_cb(cb):
     data = cb['data']
     
     u = conn.execute("SELECT * FROM users WHERE user_id = ?", (uid,)).fetchone()
+    
+    # Проверка подписки на канал
+    if data == "channel_check":
+        if check_subscription(uid, "OfficialPlutonium"):
+            cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
+                   "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
+                   "👇 Используй кнопки ниже для навигации")
+            api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": main_kb(uid)})
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
+        else:
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
+        return
+    
+    # Проверка ОП
+    if data == "op_check":
+        op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
+        if op:
+            if check_subscription(uid, op['link'].split('/')[-1]):
+                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
+                cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
+                       "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
+                       "👇 Используй кнопки ниже для навигации")
+                api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": main_kb(uid)})
+            else:
+                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
+        return
     
     if data == "to_main":
         cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
@@ -284,18 +322,6 @@ def handle_cb(cb):
         api("sendMessage", {"chat_id": cid, "text": "👑 Управление админами\n\nОтправь ID или username пользователя для управления правами.\n\nПример: 1471307057 или @username"})
         api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь ID или username"})
     
-    elif data == "op_check":
-        op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
-        if op:
-            if check_subscription(uid, op['link'].split('/')[-1]):
-                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
-                cap = ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
-                       "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
-                       "👇 Используй кнопки ниже для навигации")
-                api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": main_kb(uid)})
-            else:
-                api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
-    
     elif data.startswith("perm_"):
         if uid != OWNER_ID:
             return
@@ -316,6 +342,20 @@ def handle_cb(cb):
             conn.execute("INSERT OR REPLACE INTO admins (user_id, perms, added_by) VALUES (?, ?, ?)", (target_id, perms, uid))
             api("sendMessage", {"chat_id": cid, "text": f"✅ Админу {target_id} выданы все права"})
         
+        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ Админ панель Plutonium", "reply_markup": admin_kb(uid)})
+    
+    elif data.startswith("ban_do_"):
+        target_id = int(data.split("_")[2])
+        conn.execute("UPDATE users SET banned = 1 WHERE user_id = ?", (target_id,))
+        conn.commit()
+        api("sendMessage", {"chat_id": cid, "text": f"✅ Пользователь {target_id} забанен"})
+        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ Админ панель Plutonium", "reply_markup": admin_kb(uid)})
+    
+    elif data.startswith("unban_do_"):
+        target_id = int(data.split("_")[2])
+        conn.execute("UPDATE users SET banned = 0 WHERE user_id = ?", (target_id,))
+        conn.commit()
+        api("sendMessage", {"chat_id": cid, "text": f"✅ Пользователь {target_id} разбанен"})
         api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ Админ панель Plutonium", "reply_markup": admin_kb(uid)})
 
 # --- ОСНОВНОЙ ЦИКЛ ---
@@ -360,22 +400,6 @@ def main():
                     conn.execute("INSERT INTO users (user_id, username, first_name, last_active) VALUES (?, ?, ?, ?)", 
                                  (uid, username, first_name, int(time.time())))
                     conn.commit()
-                    
-                    # Проверка ОП для новых пользователей
-                    op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
-                    if op:
-                        if not check_subscription(uid, op['link'].split('/')[-1]):
-                            cap = ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
-                                   "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись для доступа!")
-                            api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": cap, "parse_mode": "HTML", 
-                                              "reply_markup": op_check_kb(op['link'])})
-                            continue
-                        
-                        new_cur = op['current'] + 1
-                        conn.execute("UPDATE op_settings SET current = ? WHERE id = ?", (new_cur, op['id']))
-                        if new_cur >= op['target']:
-                            conn.execute("UPDATE op_settings SET active = 0 WHERE id = ?", (op['id'],))
-                        conn.commit()
                 
                 # Обновляем активность
                 conn.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (int(time.time()), uid))
@@ -489,8 +513,8 @@ def main():
                             target_id = user['user_id'] if user else None
                         
                         if target_id:
-                            ban_step[uid] = target_id
                             waiting[uid] = "ban_action"
+                            waiting[f"{uid}_target"] = target_id
                             api("sendMessage", {"chat_id": uid, "text": f"👤 Пользователь: {target_id}\n\nВыбери действие:", 
                                                "reply_markup": {"inline_keyboard": [
                                                    [{"text": "🔒 ЗАБАНИТЬ", "callback_data": f"ban_do_{target_id}"}],
@@ -557,7 +581,7 @@ def main():
                         cap = ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
                                "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись на канал @OfficialPlutonium для доступа!")
                         api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": cap, "parse_mode": "HTML", 
-                                          "reply_markup": {"inline_keyboard": [[{"text": "ПОДПИСАТЬСЯ", "url": "https://t.me/OfficialPlutonium", "icon_custom_emoji_id": "5927118708873892465"}]]}})
+                                          "reply_markup": channel_check_kb()})
                         continue
                     
                     # Проверка ОП
