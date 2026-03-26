@@ -24,7 +24,7 @@ conn.row_factory = sqlite3.Row
 
 def init_db():
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS files (hash TEXT PRIMARY KEY, file_id TEXT, name TEXT, game TEXT, ts INTEGER, created_by INTEGER)")
+    c.execute("CREATE TABLE IF NOT EXISTS files (hash TEXT PRIMARY KEY, file_id TEXT, name TEXT, game TEXT, ts INTEGER, created_by INTEGER, downloads INTEGER DEFAULT 0)")
     c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, downloads INTEGER DEFAULT 0, banned INTEGER DEFAULT 0, last_active INTEGER DEFAULT 0)")
     c.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY, perms TEXT, added_by INTEGER)")
     c.execute("CREATE TABLE IF NOT EXISTS op_settings (id INTEGER PRIMARY KEY, link TEXT, target INTEGER, current INTEGER DEFAULT 0, active INTEGER DEFAULT 0)")
@@ -185,6 +185,7 @@ def handle_cb(cb):
                    f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> **Buy plutonium - @PlutoniumllcBot**")
             api("sendDocument", {"chat_id": cid, "document": f['file_id'], "caption": cap, "parse_mode": "HTML"})
             conn.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (uid,))
+            conn.execute("UPDATE files SET downloads = downloads + 1 WHERE hash = ?", (f_hash,))
             conn.commit()
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": f"✅ {f['name']} отправлен!"})
     
@@ -201,7 +202,8 @@ def handle_cb(cb):
             return
         uc = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         dc = conn.execute("SELECT SUM(downloads) FROM users").fetchone()[0] or 0
-        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": f"👥 Юзеров: {uc}\n📥 Скачано: {dc}", "show_alert": True})
+        fc = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": f"👥 Юзеров: {uc}\n📥 Скачано: {dc}\n📁 Файлов: {fc}", "show_alert": True})
     
     # Очистка неактивных
     elif data == "a_clean":
@@ -219,8 +221,53 @@ def handle_cb(cb):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
             return
         waiting[uid] = "addfile"
-        api("sendMessage", {"chat_id": cid, "text": "📤 Отправь файл с подписью:\n`Название | #игра`\n\nПример: `Aimbot | #standoff`"})
-        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ **Админ панель Plutonium**", "reply_markup": admin_kb(uid)})
+        api("sendMessage", {"chat_id": cid, "text": "📤 **Отправь файл**\n\nВ подписи укажи:\n`Название | #игра`\n\nПример: `Aimbot | #standoff`\n\nДоступные игры:\n#standoff - Standoff 2\n#pubg - Pubg Mobile\n#other - Other Games"})
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь файл с подписью"})
+    
+    # ОП (обязательная подписка)
+    elif data == "a_op":
+        if not has_perm(uid, "all"):
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
+            return
+        waiting[uid] = "op_link"
+        api("sendMessage", {"chat_id": cid, "text": "🔗 **Создание ОП**\n\nОтправь ссылку на канал/пост для обязательной подписки.\n\nПример: `https://t.me/OfficialPlutonium`"})
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь ссылку"})
+    
+    # Реклама
+    elif data == "a_ads":
+        if not has_perm(uid, "all"):
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
+            return
+        waiting[uid] = "ad_post"
+        api("sendMessage", {"chat_id": cid, "text": "📢 **Размещение рекламы**\n\nОтправь пост (сообщение) для рекламы.\n\nПоддерживается форматирование и TG Premium эмодзи."})
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь пост"})
+    
+    # Бан/Разбан
+    elif data == "a_ban":
+        if not has_perm(uid, "all"):
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
+            return
+        waiting[uid] = "ban_user"
+        api("sendMessage", {"chat_id": cid, "text": "🚫 **Бан/Разбан пользователя**\n\nОтправь ID или username пользователя.\n\nПример: `1471307057` или `@username`"})
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь ID или username"})
+    
+    # Рассылка
+    elif data == "a_broad":
+        if not has_perm(uid, "all"):
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
+            return
+        waiting[uid] = "broadcast"
+        api("sendMessage", {"chat_id": cid, "text": "📢 **Рассылка**\n\nОтправь сообщение для рассылки всем пользователям.\n\nПоддерживается форматирование и TG Premium эмодзи.\n\n/cancel - отмена"})
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь сообщение"})
+    
+    # Управление админами
+    elif data == "a_mng":
+        if uid != OWNER_ID:
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Только для владельца", "show_alert": True})
+            return
+        waiting[uid] = "add_admin"
+        api("sendMessage", {"chat_id": cid, "text": "👑 **Управление админами**\n\nОтправь ID или username пользователя для управления правами.\n\nПример: `1471307057` или `@username`"})
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь ID или username"})
 
 # --- ОСНОВНОЙ ЦИКЛ ---
 def main():
@@ -272,8 +319,8 @@ def main():
                 conn.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (int(time.time()), uid))
                 conn.commit()
                 
-                # Добавление файлов через хештеги
-                if 'document' in m and waiting.get(uid) == "addfile":
+                # Обработка ожиданий
+                if waiting.get(uid) == "addfile" and 'document' in m:
                     cap = m.get('caption', '')
                     game = "other"
                     if "#standoff" in cap.lower():
@@ -293,12 +340,163 @@ def main():
                                  (f_hash, m['document']['file_id'], name, game, int(time.time()), uid))
                     conn.commit()
                     
-                    api("sendMessage", {"chat_id": uid, "text": f"✅ Файл добавлен в папку {game.upper()}"})
+                    # Отправляем ссылку на файл
+                    file_link = f"https://t.me/{m['chat']['username'] or 'PlutoniumCheatsBot'}?start={f_hash}"
+                    cap = (f"✅ **Файл добавлен!**\n\n"
+                           f"📄 **Название:** {name}\n"
+                           f"🎮 **Игра:** {game.upper()}\n"
+                           f"🔗 **Ссылка:** `{file_link}`\n"
+                           f"📥 **Скачиваний:** 0\n\n"
+                           f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> При выдаче файла будет:\n"
+                           f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
+                    api("sendMessage", {"chat_id": uid, "text": cap, "parse_mode": "HTML"})
+                    waiting[uid] = None
+                    continue
+                
+                # ОП - получение ссылки
+                elif waiting.get(uid) == "op_link" and text:
+                    link = text.strip()
+                    if link.startswith("http"):
+                        waiting[uid] = "op_target"
+                        waiting[f"{uid}_link"] = link
+                        api("sendMessage", {"chat_id": uid, "text": "🔢 Введи количество пользователей для ОП:\n\nПример: `100`"})
+                    else:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Отправь корректную ссылку!"})
+                    continue
+                
+                elif waiting.get(uid) == "op_target" and text.isdigit():
+                    target = int(text)
+                    link = waiting.get(f"{uid}_link", "")
+                    conn.execute("INSERT INTO op_settings (link, target, current, active) VALUES (?, ?, 0, 1)", (link, target))
+                    conn.commit()
+                    api("sendMessage", {"chat_id": uid, "text": f"✅ ОП создана!\n\nСсылка: {link}\nЦель: {target} пользователей"})
+                    waiting[uid] = None
+                    if f"{uid}_link" in waiting:
+                        del waiting[f"{uid}_link"]
+                    continue
+                
+                # Реклама - получение поста
+                elif waiting.get(uid) == "ad_post" and (text or m.get('caption')):
+                    msg_text = text or m.get('caption', '')
+                    waiting[uid] = "ad_time"
+                    waiting[f"{uid}_msg"] = json.dumps(m)
+                    api("sendMessage", {"chat_id": uid, "text": "⏱️ Введи время в часах (от 1 до 72):\n\nПример: `24`"})
+                    continue
+                
+                elif waiting.get(uid) == "ad_time" and text.isdigit():
+                    hours = int(text)
+                    if 1 <= hours <= 72:
+                        expire = int(time.time()) + hours * 3600
+                        msg_data = json.loads(waiting.get(f"{uid}_msg", "{}"))
+                        
+                        # Отправляем рекламу всем пользователям
+                        users = conn.execute("SELECT user_id FROM users").fetchall()
+                        sent = 0
+                        for user in users:
+                            try:
+                                if 'text' in msg_data:
+                                    api("sendMessage", {"chat_id": user['user_id'], "text": msg_data['text'], "parse_mode": "HTML"})
+                                elif 'caption' in msg_data:
+                                    api("sendPhoto", {"chat_id": user['user_id'], "photo": msg_data.get('photo', [{}])[-1].get('file_id', ''), "caption": msg_data['caption'], "parse_mode": "HTML"})
+                                sent += 1
+                            except:
+                                pass
+                            time.sleep(0.05)
+                        
+                        api("sendMessage", {"chat_id": uid, "text": f"✅ Реклама отправлена {sent} пользователям\n\nУдаление через {hours} часов"})
+                        waiting[uid] = None
+                        if f"{uid}_msg" in waiting:
+                            del waiting[f"{uid}_msg"]
+                    else:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Введи число от 1 до 72"})
+                    continue
+                
+                # Бан/Разбан
+                elif waiting.get(uid) == "ban_user" and text:
+                    target = text.strip().replace('@', '')
+                    try:
+                        target_id = int(target) if target.isdigit() else None
+                        if not target_id:
+                            user = conn.execute("SELECT user_id FROM users WHERE username = ?", (target,)).fetchone()
+                            target_id = user['user_id'] if user else None
+                        
+                        if target_id:
+                            user = conn.execute("SELECT * FROM users WHERE user_id = ?", (target_id,)).fetchone()
+                            if user and user['banned']:
+                                conn.execute("UPDATE users SET banned = 0 WHERE user_id = ?", (target_id,))
+                                api("sendMessage", {"chat_id": uid, "text": f"✅ Пользователь {target_id} разбанен"})
+                            elif user:
+                                conn.execute("UPDATE users SET banned = 1 WHERE user_id = ?", (target_id,))
+                                api("sendMessage", {"chat_id": uid, "text": f"✅ Пользователь {target_id} забанен"})
+                            else:
+                                api("sendMessage", {"chat_id": uid, "text": "❌ Пользователь не найден"})
+                        else:
+                            api("sendMessage", {"chat_id": uid, "text": "❌ Пользователь не найден"})
+                    except:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Ошибка"})
+                    waiting[uid] = None
+                    continue
+                
+                # Рассылка
+                elif waiting.get(uid) == "broadcast" and text:
+                    if text == "/cancel":
+                        waiting[uid] = None
+                        api("sendMessage", {"chat_id": uid, "text": "✅ Рассылка отменена"})
+                        continue
+                    
+                    users = conn.execute("SELECT user_id FROM users WHERE banned = 0").fetchall()
+                    sent = 0
+                    for user in users:
+                        try:
+                            api("sendMessage", {"chat_id": user['user_id'], "text": text, "parse_mode": "HTML"})
+                            sent += 1
+                        except:
+                            pass
+                        time.sleep(0.05)
+                    api("sendMessage", {"chat_id": uid, "text": f"✅ Рассылка завершена!\n\nОтправлено: {sent} пользователям"})
+                    waiting[uid] = None
+                    continue
+                
+                # Управление админами
+                elif waiting.get(uid) == "add_admin" and text and uid == OWNER_ID:
+                    target = text.strip().replace('@', '')
+                    try:
+                        target_id = int(target) if target.isdigit() else None
+                        if not target_id:
+                            user = conn.execute("SELECT user_id FROM users WHERE username = ?", (target,)).fetchone()
+                            target_id = user['user_id'] if user else None
+                        
+                        if target_id:
+                            admin = conn.execute("SELECT * FROM admins WHERE user_id = ?", (target_id,)).fetchone()
+                            if admin:
+                                conn.execute("DELETE FROM admins WHERE user_id = ?", (target_id,))
+                                api("sendMessage", {"chat_id": uid, "text": f"✅ Админ {target_id} удален"})
+                            else:
+                                # Клавиатура для выбора прав
+                                perms_kb = {
+                                    "inline_keyboard": [
+                                        [{"text": "📁 Добавить файл", "callback_data": f"perm_addfile_{target_id}"}],
+                                        [{"text": "📢 Рассылка", "callback_data": f"perm_broad_{target_id}"}],
+                                        [{"text": "👑 Все права", "callback_data": f"perm_all_{target_id}"}],
+                                        [{"text": "🔙 Отмена", "callback_data": "a_mng"}]
+                                    ]
+                                }
+                                api("sendMessage", {"chat_id": uid, "text": f"👑 Выбери права для {target_id}:", "reply_markup": perms_kb})
+                        else:
+                            api("sendMessage", {"chat_id": uid, "text": "❌ Пользователь не найден"})
+                    except:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Ошибка"})
                     waiting[uid] = None
                     continue
                 
                 # Команда /start
                 if text == "/start":
+                    # Проверка бана
+                    user = conn.execute("SELECT banned FROM users WHERE user_id = ?", (uid,)).fetchone()
+                    if user and user['banned']:
+                        api("sendMessage", {"chat_id": uid, "text": "⛔ **Вы забанены!**\nОбратитесь к администратору.", "parse_mode": "HTML"})
+                        continue
+                    
                     # Проверка ОП
                     op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
                     if op:
@@ -311,6 +509,18 @@ def main():
                                "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> **Я храню файлы с канала @OfficialPlutonium**\n"
                                "👇 **Используй кнопки ниже для навигации**")
                         api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": cap, "parse_mode": "HTML", "reply_markup": main_kb(uid)})
+                
+                # Обработка ссылок на файлы
+                elif text.startswith("/start "):
+                    f_hash = text.split(" ")[1]
+                    f = conn.execute("SELECT * FROM files WHERE hash = ?", (f_hash,)).fetchone()
+                    if f:
+                        cap = (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> **Ваш Файл: {f['name']}**\n"
+                               f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> **Buy plutonium - @PlutoniumllcBot**")
+                        api("sendDocument", {"chat_id": uid, "document": f['file_id'], "caption": cap, "parse_mode": "HTML"})
+                        conn.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (uid,))
+                        conn.execute("UPDATE files SET downloads = downloads + 1 WHERE hash = ?", (f_hash,))
+                        conn.commit()
             
             time.sleep(0.5)
             
@@ -320,3 +530,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+                 
