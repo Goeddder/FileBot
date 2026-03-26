@@ -105,7 +105,7 @@ def get_channel_link(channel_id):
     except:
         return None
 
-# --- КЛАВИАТУРЫ (с TG Premium эмодзи) ---
+# --- КЛАВИАТУРЫ ---
 def main_kb(uid):
     kb = [
         [{"text": "Игры", "callback_data": "menu_games", "icon_custom_emoji_id": "5938413566624272793"}],
@@ -189,7 +189,14 @@ def ban_kb(target_id):
         ]
     }
 
-# --- ТЕКСТЫ С TG PREMIUM ЭМОДЗИ ---
+def file_footer_kb():
+    return {
+        "inline_keyboard": [
+            [{"text": "Plutonium", "url": "https://t.me/OfficialPlutonium", "icon_custom_emoji_id": "5339472242529045815"}]
+        ]
+    }
+
+# --- ТЕКСТЫ ---
 def get_welcome_text():
     return ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
             "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
@@ -213,11 +220,9 @@ def get_profile_text(uid, first_name, username, downloads):
 def get_file_footer(name, description):
     if description:
         return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}\n"
-                f"📝 {description}\n"
-                f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
+                f"📝 {description}")
     else:
-        return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}\n"
-                f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
+        return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}")
 
 def get_add_file_success(name, description, game, file_link):
     return (f"✅ Файл добавлен!\n\n"
@@ -370,10 +375,12 @@ def handle_cb(cb):
         
         files = conn.execute("SELECT * FROM files WHERE game = ? ORDER BY ts DESC LIMIT 10", (game_name,)).fetchall()
         if files:
-            cap = f"🎮 {game_name.upper()}\n\n📂 Последние файлы:"
+            cap = f"🎮 {game_name.upper()}\n\n📂 Файлы:"
             api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": files_kb(files)})
         else:
-            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет файлов", "show_alert": True})
+            # Если файлов нет - просто показываем пустую категорию
+            cap = f"🎮 {game_name.upper()}\n\n📂 Файлов пока нет"
+            api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": back_kb()})
         return
     
     if data.startswith("dl_"):
@@ -386,14 +393,13 @@ def handle_cb(cb):
                 "from_chat_id": STORAGE_CHANNEL_ID,
                 "message_id": f['file_id'],
                 "caption": cap,
-                "parse_mode": "HTML"
+                "parse_mode": "HTML",
+                "reply_markup": file_footer_kb()
             })
             conn.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (uid,))
             conn.execute("UPDATE files SET downloads = downloads + 1 WHERE hash = ?", (f_hash,))
             conn.commit()
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": f"✅ {f['name']} отправлен!"})
-        else:
-            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Файл не найден", "show_alert": True})
         return
     
     if data == "adm_root":
@@ -785,13 +791,14 @@ def main():
                 elif text.startswith("/start "):
                     f_hash = text.split(" ")[1]
                     
+                    # Проверяем, не обрабатывали ли уже этот хеш
                     if f_hash in processed_hashes:
                         continue
                     processed_hashes.add(f_hash)
                     
                     f = conn.execute("SELECT * FROM files WHERE hash = ?", (f_hash,)).fetchone()
                     if f:
-                        # Отправляем "Отправляю файл!" перед отправкой
+                               # Отправляем "Отправляю файл!"
                         api("sendMessage", {"chat_id": uid, "text": "<tg-emoji emoji-id=\"6037373985400819577\">📤</tg-emoji> Отправляю файл!", "parse_mode": "HTML"})
                         
                         cap = get_file_footer(f['name'], f['description'])
@@ -800,13 +807,12 @@ def main():
                             "from_chat_id": STORAGE_CHANNEL_ID,
                             "message_id": f['file_id'],
                             "caption": cap,
-                            "parse_mode": "HTML"
+                            "parse_mode": "HTML",
+                            "reply_markup": file_footer_kb()
                         })
                         conn.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (uid,))
                         conn.execute("UPDATE files SET downloads = downloads + 1 WHERE hash = ?", (f_hash,))
                         conn.commit()
-                    else:
-                        api("sendMessage", {"chat_id": uid, "text": "❌ Файл не найден"})
                     
                     time.sleep(5)
                     processed_hashes.discard(f_hash)
