@@ -8,7 +8,7 @@ import time
 import re
 
 # --- НАСТРОЙКИ ---
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAFZImIckEGin220ZJR9WL4abbEUy_p5OZw")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8071432823:AAHh27N0UVMpt3grjhL0XX_XypAncrF8Mi8")
 OWNER_ID = int(os.environ.get("OWNER_ID", 1471307057))
 CHANNEL_URL = os.environ.get("CHANNEL_URL", "https://t.me/OfficialPlutonium")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "OfficialPlutonium")
