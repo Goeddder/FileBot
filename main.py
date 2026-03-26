@@ -75,11 +75,18 @@ def api(method, data=None):
         logger.error(f"API error: {e}")
         return {'ok': False}
 
+
 def send_message(chat_id, text, reply_markup=None):
     data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         data["reply_markup"] = reply_markup
     return api("sendMessage", data)
+# --- СБРОС ВЕБХУКА (ВАЖНО!) ---
+try:
+    api("deleteWebhook", {"drop_pending_updates": True})
+    logger.info("✅ Webhook удалён")
+except:
+    pass
 
 def send_document(chat_id, file_id, caption=None):
     data = {"chat_id": chat_id, "document": file_id, "parse_mode": "HTML"}
