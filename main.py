@@ -35,6 +35,7 @@ def init_db():
     c.execute("CREATE TABLE IF NOT EXISTS ads (msg_id INTEGER PRIMARY KEY, chat_id INTEGER, expire INTEGER)")
     c.execute("INSERT OR IGNORE INTO admins (user_id, perms, added_by) VALUES (?, ?, ?)", (OWNER_ID, '["all"]', OWNER_ID))
     conn.commit()
+    logger.info("✅ База данных готова")
 
 init_db()
 
@@ -102,7 +103,7 @@ def get_channel_link(channel_id):
     except:
         return None
 
-# --- КЛАВИАТУРЫ (с TG Premium эмодзи через icon_custom_emoji_id) ---
+# --- КЛАВИАТУРЫ (TG Premium через icon_custom_emoji_id) ---
 def main_kb(uid):
     kb = [
         [{"text": "Игры", "callback_data": "menu_games", "icon_custom_emoji_id": "5938413566624272793"}],
@@ -177,9 +178,6 @@ def channel_check_kb():
         ]
     }
 
-# --- ХРАНИЛИЩА ---
-waiting = {}
-
 # --- ТЕКСТЫ С TG PREMIUM ЭМОДЗИ ---
 def get_welcome_text():
     return "<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n👇 Используй кнопки ниже для навигации"
@@ -209,6 +207,9 @@ def get_add_file_success(name, game, file_link):
             f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> При выдаче файла будет:\n"
             f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
 
+# --- ХРАНИЛИЩА ---
+waiting = {}
+
 # --- ОБРАБОТКА CALLBACK ---
 def handle_cb(cb):
     uid = cb['from']['id']
@@ -218,7 +219,6 @@ def handle_cb(cb):
     
     u = conn.execute("SELECT * FROM users WHERE user_id = ?", (uid,)).fetchone()
     
-    # Проверка подписки на канал
     if data == "channel_check":
         if check_subscription(uid, CHANNEL_ID):
             api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": get_welcome_text(), "parse_mode": "HTML", "reply_markup": main_kb(uid)})
@@ -227,7 +227,6 @@ def handle_cb(cb):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
         return
     
-    # Проверка ОП
     if data.startswith("op_check_"):
         try:
             op_channel_id = int(data.split("_")[2])
@@ -373,13 +372,6 @@ def handle_cb(cb):
             conn.execute("INSERT OR REPLACE INTO admins (user_id, perms, added_by) VALUES (?, ?, ?)", (target_id, perms, uid))
             api("sendMessage", {"chat_id": cid, "text": f"✅ Админу {target_id} выданы все права"})
         
-        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ Админ панель Plutonium", "reply_markup": admin_kb(uid)})
-    
-    elif data.startswith("ban_do_"):
-        target_id = int(data.split("_")[2])
-        conn.execute("UPDATE users SET banned = 1 WHERE user_id = ?", (target_id,))
-        conn.commit()
-        api("sendMessage", {"chat_id": cid, "text": f"✅ Пользователь {target_id} забанен"})
         api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ Админ панель Plutonium", "reply_markup": admin_kb(uid)})
     
     elif data.startswith("ban_do_"):
