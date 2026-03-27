@@ -196,7 +196,7 @@ def file_footer_kb():
         ]
     }
 
-# --- ТЕКСТЫ ---
+# --- ТЕКСТЫ С TG PREMIUM ЭМОДЗИ ---
 def get_welcome_text():
     return ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
             "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
@@ -217,9 +217,17 @@ def get_profile_text(uid, first_name, username, downloads):
             f"<tg-emoji emoji-id=\"5814247475141153332\">🔖</tg-emoji> Username: @{username}\n"
             f"<tg-emoji emoji-id=\"6039802767931871481\">📥</tg-emoji> Файлов получено: {downloads}")
 
+def get_help_text():
+    return ("<tg-emoji emoji-id=\"5208957270259425030\">❓</tg-emoji> Помощь\n\n"
+            "<tg-emoji emoji-id=\"5794164805065514131\">1️⃣</tg-emoji> Нажми Игры\n"
+            "<tg-emoji emoji-id=\"5794085322400733645\">2️⃣</tg-emoji> Выбери игру\n"
+            "<tg-emoji emoji-id=\"5794280000383358988\">3️⃣</tg-emoji> Нажми на название чита\n"
+            "<tg-emoji emoji-id=\"5794241397217304511\">4️⃣</tg-emoji> Файл автоматически отправится\n\n"
+            "<tg-emoji emoji-id=\"6032693626394382504\">📌</tg-emoji> Для админов есть дополнительные функции.")
+
 def get_file_footer(name, description):
     if description:
-        return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}\n"
+        return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}\n\n"
                 f"📝 {description}\n\n"
                 f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
     else:
@@ -362,8 +370,7 @@ def handle_cb(cb):
         return
     
     if data == "menu_help":
-        text = "❓ Помощь\n\n1️⃣ Нажми Игры\n2️⃣ Выбери игру\n3️⃣ Нажми на название чита\n4️⃣ Файл автоматически отправится\n\n📌 Для админов есть дополнительные функции."
-        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": text, "parse_mode": "HTML", "reply_markup": back_kb()})
+        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": get_help_text(), "parse_mode": "HTML", "reply_markup": back_kb()})
         return
     
     if data == "menu_games":
