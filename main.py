@@ -8,7 +8,7 @@ import time
 import threading
 import re
 
-# --- КОНФИГУРАЦИЯ ---
+# --- НАСТРОЙКИ ---
 BOT_TOKEN = "8071432823:AAHh27N0UVMpt3grjhL0XX_XypAncrF8Mi8"
 OWNER_ID = 1471307057
 PHOTO_URL = "https://files.catbox.moe/jdtlab.jpg"
@@ -196,7 +196,7 @@ def file_footer_kb():
         ]
     }
 
-# --- ТЕКСТЫ С TG PREMIUM ЭМОДЗИ ---
+# --- ТЕКСТЫ ---
 def get_welcome_text():
     return ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
             "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
@@ -306,15 +306,11 @@ def get_unban_success(target_id):
 waiting = {}
 processed_hashes = set()
 
-# --- ФУНКЦИЯ ОТПРАВКИ С ЭНТИТИС ---
+# --- ФУНКЦИЯ ОТПРАВКИ С ЭНТИТИС (ДЛЯ РАССЫЛКИ) ---
 def send_with_entities(chat_id, message_data):
     try:
         if 'text' in message_data:
-            data = {
-                "chat_id": chat_id,
-                "text": message_data['text'],
-                "parse_mode": "HTML"
-            }
+            data = {"chat_id": chat_id, "text": message_data['text']}
             if 'entities' in message_data:
                 data["entities"] = message_data['entities']
             return api("sendMessage", data)
@@ -322,8 +318,7 @@ def send_with_entities(chat_id, message_data):
             data = {
                 "chat_id": chat_id,
                 "photo": message_data['photo'][-1]['file_id'],
-                "caption": message_data['caption'],
-                "parse_mode": "HTML"
+                "caption": message_data['caption']
             }
             if 'caption_entities' in message_data:
                 data["caption_entities"] = message_data['caption_entities']
@@ -331,6 +326,214 @@ def send_with_entities(chat_id, message_data):
     except Exception as e:
         logger.error(f"Send with entities error: {e}")
         return None
+
+# --- СОХРАНЕНИЕ СООБЩЕНИЯ ДЛЯ РАССЫЛКИ ---
+def save_broadcast_message(user_id, message, chat_id):
+    try:
+        msg_data = {}
+        
+        if 'text' in message:
+            msg_data['type'] = 'text'
+            msg_data['text'] = message['text']
+            if 'entities' in message:
+                msg_data['entities'] = []
+                for e in message['entities']:
+                    entity = {
+                        'offset': e['offset'],
+                        'length': e['length'],
+                        'type': e['type']
+                    }
+                    if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
+                        entity['custom_emoji_id'] = e['custom_emoji_id']
+                    if e['type'] == 'text_link' and 'url' in e:
+                        entity['url'] = e['url']
+                    if e['type'] == 'text_mention' and 'user' in e:
+                        entity['user'] = {'id': e['user']['id']}
+                    msg_data['entities'].append(entity)
+        
+        elif 'photo' in message:
+            msg_data['type'] = 'photo'
+            msg_data['photo'] = message['photo']
+            if 'caption' in message:
+                msg_data['caption'] = message['caption']
+                if 'caption_entities' in message:
+                    msg_data['caption_entities'] = []
+                    for e in message['caption_entities']:
+                        entity = {
+                            'offset': e['offset'],
+                            'length': e['length'],
+                            'type': e['type']
+                        }
+                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
+                            entity['custom_emoji_id'] = e['custom_emoji_id']
+                        if e['type'] == 'text_link' and 'url' in e:
+                            entity['url'] = e['url']
+                        if e['type'] == 'text_mention' and 'user' in e:
+                            entity['user'] = {'id': e['user']['id']}
+                        msg_data['caption_entities'].append(entity)
+        
+        elif 'video' in message:
+            msg_data['type'] = 'video'
+            msg_data['video'] = message['video']['file_id']
+            if 'caption' in message:
+                msg_data['caption'] = message['caption']
+                if 'caption_entities' in message:
+                    msg_data['caption_entities'] = []
+                    for e in message['caption_entities']:
+                        entity = {
+                            'offset': e['offset'],
+                            'length': e['length'],
+                            'type': e['type']
+                        }
+                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
+                            entity['custom_emoji_id'] = e['custom_emoji_id']
+                        if e['type'] == 'text_link' and 'url' in e:
+                            entity['url'] = e['url']
+                        if e['type'] == 'text_mention' and 'user' in e:
+                            entity['user'] = {'id': e['user']['id']}
+                        msg_data['caption_entities'].append(entity)
+        
+        elif 'document' in message:
+            msg_data['type'] = 'document'
+            msg_data['document'] = message['document']['file_id']
+            if 'caption' in message:
+                msg_data['caption'] = message['caption']
+                if 'caption_entities' in message:
+                    msg_data['caption_entities'] = []
+                    for e in message['caption_entities']:
+                        entity = {
+                            'offset': e['offset'],
+                            'length': e['length'],
+                            'type': e['type']
+                        }
+                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
+                            entity['custom_emoji_id'] = e['custom_emoji_id']
+                        if e['type'] == 'text_link' and 'url' in e:
+                            entity['url'] = e['url']
+                        if e['type'] == 'text_mention' and 'user' in e:
+                            entity['user'] = {'id': e['user']['id']}
+                        msg_data['caption_entities'].append(entity)
+        
+        elif 'video' in message:
+            msg_data['type'] = 'video'
+            msg_data['video'] = message['video']['file_id']
+            if 'caption' in message:
+                msg_data['caption'] = message['caption']
+                if 'caption_entities' in message:
+                    msg_data['caption_entities'] = []
+                    for e in message['caption_entities']:
+                        entity = {
+                            'offset': e['offset'],
+                            'length': e['length'],
+                            'type': e['type']
+                        }
+                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
+                            entity['custom_emoji_id'] = e['custom_emoji_id']
+                        if e['type'] == 'text_link' and 'url' in e:
+                            entity['url'] = e['url']
+                        if e['type'] == 'text_mention' and 'user' in e:
+                            entity['user'] = {'id': e['user']['id']}
+                        msg_data['caption_entities'].append(entity)
+        
+        elif 'document' in message:
+            msg_data['type'] = 'document'
+            msg_data['document'] = message['document']['file_id']
+            if 'caption' in message:
+                msg_data['caption'] = message['caption']
+                if 'caption_entities' in message:
+                    msg_data['caption_entities'] = []
+                    for e in message['caption_entities']:
+                        entity = {
+                            'offset': e['offset'],
+                            'length': e['length'],
+                            'type': e['type']
+                        }
+                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
+                            entity['custom_emoji_id'] = e['custom_emoji_id']
+                        if e['type'] == 'text_link' and 'url' in e:
+                            entity['url'] = e['url']
+                        if e['type'] == 'text_mention' and 'user' in e:
+                            entity['user'] = {'id': e['user']['id']}
+                        msg_data['caption_entities'].append(entity)
+        
+        elif 'animation' in message:
+            msg_data['type'] = 'animation'
+            msg_data['animation'] = message['animation']['file_id']
+            if 'caption' in message:
+                msg_data['caption'] = message['caption']
+                if 'caption_entities' in message:
+                    msg_data['caption_entities'] = []
+                    for e in message['caption_entities']:
+                        entity = {
+                            'offset': e['offset'],
+                            'length': e['length'],
+                            'type': e['type']
+                        }
+                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
+                            entity['custom_emoji_id'] = e['custom_emoji_id']
+                        if e['type'] == 'text_link' and 'url' in e:
+                            entity['url'] = e['url']
+                        if e['type'] == 'text_mention' and 'user' in e:
+                            entity['user'] = {'id': e['user']['id']}
+                        msg_data['caption_entities'].append(entity)
+        
+        waiting[f"{user_id}_broadcast"] = json.dumps(msg_data, ensure_ascii=False)
+        logger.info(f"Saved broadcast message type: {msg_data.get('type')}")
+        return True
+    except Exception as e:
+        logger.error(f"Save broadcast error: {e}")
+        return False
+
+# --- ОТПРАВКА РАССЫЛКИ ---
+def send_broadcast(msg_data):
+    users = conn.execute("SELECT user_id FROM users WHERE banned = 0").fetchall()
+    sent = 0
+    msg_type = msg_data.get('type', 'text')
+    
+    for user in users:
+        try:
+            if msg_type == 'text':
+                data = {"chat_id": user['user_id'], "text": msg_data['text']}
+                if msg_data.get('entities'):
+                    data["entities"] = msg_data['entities']
+                api("sendMessage", data)
+            elif msg_type == 'photo':
+                data = {
+                    "chat_id": user['user_id'],
+                    "photo": msg_data['photo'][-1]['file_id']
+                }
+                if msg_data.get('caption'):
+                    data["caption"] = msg_data['caption']
+                if msg_data.get('caption_entities'):
+                    data["caption_entities"] = msg_data['caption_entities']
+                api("sendPhoto", data)
+            elif msg_type == 'video':
+                data = {"chat_id": user['user_id'], "video": msg_data['video']}
+                if msg_data.get('caption'):
+                    data["caption"] = msg_data['caption']
+                if msg_data.get('caption_entities'):
+                    data["caption_entities"] = msg_data['caption_entities']
+                api("sendVideo", data)
+            elif msg_type == 'document':
+                data = {"chat_id": user['user_id'], "document": msg_data['document']}
+                if msg_data.get('caption'):
+                    data["caption"] = msg_data['caption']
+                if msg_data.get('caption_entities'):
+                    data["caption_entities"] = msg_data['caption_entities']
+                api("sendDocument", data)
+            elif msg_type == 'animation':
+                data = {"chat_id": user['user_id'], "animation": msg_data['animation']}
+                if msg_data.get('caption'):
+                    data["caption"] = msg_data['caption']
+                if msg_data.get('caption_entities'):
+                    data["caption_entities"] = msg_data['caption_entities']
+                api("sendAnimation", data)
+            sent += 1
+        except Exception as e:
+            logger.error(f"Broadcast send error to {user['user_id']}: {e}")
+        time.sleep(0.05)
+    
+    return sent
 
 # --- ОБРАБОТКА CALLBACK ---
 def handle_cb(cb):
@@ -538,6 +741,7 @@ def handle_cb(cb):
 # --- ОСНОВНОЙ ЦИКЛ ---
 def main():
     logger.info("🚀 Запуск Plutonium Bot")
+    logger.info(f"👑 Владелец: {OWNER_ID}")
     logger.info(f"📢 Канал подписки ID: {CHANNEL_ID}")
     logger.info(f"💾 Канал хранения ID: {STORAGE_CHANNEL_ID}")
     api("deleteWebhook", {"drop_pending_updates": True})
@@ -679,7 +883,20 @@ def main():
                         sent = 0
                         for user in users:
                             try:
-                                send_with_entities(user['user_id'], msg_data)
+                                if 'text' in msg_data:
+                                    data = {"chat_id": user['user_id'], "text": msg_data['text']}
+                                    if 'entities' in msg_data:
+                                        data["entities"] = msg_data['entities']
+                                    api("sendMessage", data)
+                                elif 'caption' in msg_data:
+                                    data = {
+                                        "chat_id": user['user_id'],
+                                        "photo": msg_data['photo'][-1]['file_id'],
+                                        "caption": msg_data['caption']
+                                    }
+                                    if 'caption_entities' in msg_data:
+                                        data["caption_entities"] = msg_data['caption_entities']
+                                    api("sendPhoto", data)
                                 sent += 1
                             except:
                                 pass
@@ -716,29 +933,49 @@ def main():
                     continue
                 
                 # Рассылка
-                elif waiting.get(uid) == "broadcast" and text:
+                elif waiting.get(uid) == "broadcast" and (text or m.get('caption') or m.get('photo') or m.get('video') or m.get('document')):
                     if text == "/cancel":
                         waiting[uid] = None
                         api("sendMessage", {"chat_id": uid, "text": "✅ Рассылка отменена"})
                         continue
                     
-                    msg_data = {
-                        'text': text
-                    }
-                    if 'entities' in m:
-                        msg_data['entities'] = m['entities']
+                    if save_broadcast_message(uid, m, chat_id):
+                        waiting[uid] = "broadcast_confirm"
+                        preview = "📎 Сообщение сохранено"
+                        if 'text' in m:
+                            preview = m['text'][:100]
+                        elif 'caption' in m:
+                            preview = m['caption'][:100]
+                        elif 'photo' in m:
+                            preview = "📸 Фото"
+                        elif 'video' in m:
+                            preview = "🎥 Видео"
+                        elif 'document' in m:
+                            preview = "📄 Документ"
+                        
+                        api("sendMessage", {"chat_id": uid, "text": f"✅ Сохранено!\n\n{preview}\n\nОтправить всем? (ДА/НЕТ)", "reply_markup": yes_no_kb()})
+                    else:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Ошибка сохранения сообщения"})
+                        waiting[uid] = None
+                    continue
+                
+                elif waiting.get(uid) == "broadcast_confirm" and text in ["✅ ДА", "❌ НЕТ"]:
+                    if text == "✅ ДА":
+                        msg_data_str = waiting.get(f"{uid}_broadcast")
+                        if msg_data_str:
+                            msg_data = json.loads(msg_data_str)
+                            logger.info(f"📦 Broadcasting: {msg_data.get('type')}")
+                            
+                            sent = send_broadcast(msg_data)
+                            api("sendMessage", {"chat_id": uid, "text": get_broadcast_success(sent), "parse_mode": "HTML"})
+                        else:
+                            api("sendMessage", {"chat_id": uid, "text": "❌ Ошибка: нет сообщения"})
+                    else:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Отменено"})
                     
-                    users = conn.execute("SELECT user_id FROM users WHERE banned = 0").fetchall()
-                    sent = 0
-                    for user in users:
-                        try:
-                            send_with_entities(user['user_id'], msg_data)
-                            sent += 1
-                        except:
-                            pass
-                        time.sleep(0.05)
-                    api("sendMessage", {"chat_id": uid, "text": get_broadcast_success(sent), "parse_mode": "HTML"})
-                    waiting[uid] = None
+                    if f"{uid}_broadcast" in waiting:
+                        del waiting[f"{uid}_broadcast"]
+                    del waiting[uid]
                     continue
                 
                 # Управление админами
@@ -827,6 +1064,15 @@ def main():
         except Exception as e:
             logger.error(f"Main loop error: {e}")
             time.sleep(5)
+
+def yes_no_kb():
+    return {
+        "keyboard": [
+            [{"text": "✅ ДА"}, {"text": "❌ НЕТ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
 
 if __name__ == "__main__":
     main()
