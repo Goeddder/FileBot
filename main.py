@@ -7,6 +7,8 @@ import urllib.request
 import time
 import threading
 import re
+import tempfile
+import subprocess
 
 # --- НАСТРОЙКИ ---
 BOT_TOKEN = "8071432823:AAHh27N0UVMpt3grjhL0XX_XypAncrF8Mi8"
@@ -19,11 +21,29 @@ API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 CHANNEL_ID = -1003607014773
 STORAGE_CHANNEL_ID = -1003677537552
 
+# Turso настройки
+TURSO_URL = os.environ.get("TURSO_URL")
+TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
+USE_TURSO = bool(TURSO_URL and TURSO_AUTH_TOKEN)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
-conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+# --- ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ ---
+if USE_TURSO:
+    try:
+        import libsql_experimental as sqlite3
+        conn = sqlite3.connect(TURSO_URL)
+        conn.execute("PRAGMA journal_mode=WAL")
+        logger.info("✅ Подключено к Turso")
+    except ImportError:
+        logger.error("❌ libsql_experimental не установлен, использую локальную SQLite")
+        USE_TURSO = False
+        conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+else:
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    logger.info("✅ Подключено к локальной SQLite")
+
 conn.row_factory = sqlite3.Row
 
 def init_db():
@@ -42,18 +62,23 @@ init_db()
 # --- ФУНКЦИИ API ---
 def api(method, data=None):
     url = f"{API_URL}/{method}"
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(data).encode() if data else None,
-            headers={'Content-Type': 'application/json'} if data else {},
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return json.loads(response.read().decode())
-    except Exception as e:
-        logger.error(f"API error: {e}")
-        return {'ok': False}
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode() if data else None,
+                headers={'Content-Type': 'application/json'} if data else {},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            logger.error(f"API error (attempt {attempt+1}): {e}")
+            if attempt == max_retries - 1:
+                return {'ok': False}
+            time.sleep(2 ** attempt)
+    return {'ok': False}
 
 def has_perm(uid, perm):
     if uid == OWNER_ID:
@@ -101,43 +126,47 @@ def get_channel_link(channel_id):
             username = result['result'].get('username')
             if username:
                 return f"https://t.me/{username}"
+            invite_link = result['result'].get('invite_link')
+            if invite_link:
+                return invite_link
         return None
-    except:
+    except Exception as e:
+        logger.error(f"Get channel link error: {e}")
         return None
 
 # --- КЛАВИАТУРЫ ---
 def main_kb(uid):
     kb = [
-        [{"text": "Игры", "callback_data": "menu_games", "icon_custom_emoji_id": "5938413566624272793"}],
-        [{"text": "Профиль", "callback_data": "menu_prof", "icon_custom_emoji_id": "6032693626394382504"},
-         {"text": "Помощь", "callback_data": "menu_help", "icon_custom_emoji_id": "6030622631818956594"}]
+        [{"text": "🎮 Игры", "callback_data": "menu_games"}],
+        [{"text": "👤 Профиль", "callback_data": "menu_prof"},
+         {"text": "❓ Помощь", "callback_data": "menu_help"}]
     ]
     if is_admin(uid):
-        kb.append([{"text": "Админ панель", "callback_data": "adm_root", "icon_custom_emoji_id": "6030445631921721471"}])
+        kb.append([{"text": "⚡ Админ панель", "callback_data": "adm_root"}])
     return {"inline_keyboard": kb}
 
 def admin_kb(uid):
     kb = [
-        [{"text": "Рассылка", "callback_data": "a_broad", "icon_custom_emoji_id": "6037622221625626773"},
-         {"text": "Очистка", "callback_data": "a_clean", "icon_custom_emoji_id": "6021792097454002931"}],
-        [{"text": "Добавить файл", "callback_data": "a_addfile", "icon_custom_emoji_id": "5805648413743651862"},
-         {"text": "ОП", "callback_data": "a_op", "icon_custom_emoji_id": "5962952497197748583"}],
-        [{"text": "Реклама", "callback_data": "a_ads", "icon_custom_emoji_id": "5904248647972820334"},
-         {"text": "Бан/Разбан", "callback_data": "a_ban", "icon_custom_emoji_id": "5776227595708273495"}],
-        [{"text": "Статистика", "callback_data": "a_stat", "icon_custom_emoji_id": "6032742198179532882"}]
+        [{"text": "📢 Рассылка", "callback_data": "a_broad"},
+         {"text": "🧹 Очистка", "callback_data": "a_clean"}],
+        [{"text": "📁 Добавить файл", "callback_data": "a_addfile"},
+         {"text": "🔗 ОП", "callback_data": "a_op"}],
+        [{"text": "📰 Реклама", "callback_data": "a_ads"},
+         {"text": "🔨 Бан/Разбан", "callback_data": "a_ban"}],
+        [{"text": "📊 Статистика", "callback_data": "a_stat"}]
     ]
     if uid == OWNER_ID:
-        kb.append([{"text": "Управление админами", "callback_data": "a_mng", "icon_custom_emoji_id": "6032636795387121097"}])
-    kb.append([{"text": "Назад", "callback_data": "to_main"}])
+        kb.append([{"text": "👑 Управление админами", "callback_data": "a_mng"}])
+    kb.append([{"text": "🔙 Назад", "callback_data": "to_main"}])
     return {"inline_keyboard": kb}
 
 def games_kb():
     return {
         "inline_keyboard": [
-            [{"text": "Standoff 2", "callback_data": "game_so2", "icon_custom_emoji_id": "5393134637667094112"}],
-            [{"text": "Pubg Mobile", "callback_data": "game_pubg", "icon_custom_emoji_id": "6073605466221451561"}],
-            [{"text": "Other Games", "callback_data": "game_other", "icon_custom_emoji_id": "6095674537196653589"}],
-            [{"text": "Назад", "callback_data": "to_main"}]
+            [{"text": "🔫 Standoff 2", "callback_data": "game_so2"}],
+            [{"text": "🪖 Pubg Mobile", "callback_data": "game_pubg"}],
+            [{"text": "🎲 Other Games", "callback_data": "game_other"}],
+            [{"text": "🔙 Назад", "callback_data": "to_main"}]
         ]
     }
 
@@ -145,19 +174,19 @@ def files_kb(files):
     kb = []
     for f in files[:10]:
         kb.append([{"text": f"📄 {f['name'][:30]}", "callback_data": f"dl_{f['hash']}"}])
-    kb.append([{"text": "Назад", "callback_data": "menu_games"}])
+    kb.append([{"text": "🔙 Назад", "callback_data": "menu_games"}])
     return {"inline_keyboard": kb}
 
 def back_kb():
-    return {"inline_keyboard": [[{"text": "Назад", "callback_data": "to_main"}]]}
+    return {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "to_main"}]]}
 
 def perms_kb(target_id):
     return {
         "inline_keyboard": [
-            [{"text": "Добавить файл", "callback_data": f"perm_addfile_{target_id}", "icon_custom_emoji_id": "5805648413743651862"}],
-            [{"text": "Рассылка", "callback_data": f"perm_broad_{target_id}", "icon_custom_emoji_id": "6037622221625626773"}],
-            [{"text": "Все права", "callback_data": f"perm_all_{target_id}", "icon_custom_emoji_id": "6030445631921721471"}],
-            [{"text": "Отмена", "callback_data": "a_mng"}]
+            [{"text": "📁 Добавление файлов", "callback_data": f"perm_addfile_{target_id}"}],
+            [{"text": "📢 Рассылка", "callback_data": f"perm_broad_{target_id}"}],
+            [{"text": "👑 Все права", "callback_data": f"perm_all_{target_id}"}],
+            [{"text": "❌ Отмена", "callback_data": "a_mng"}]
         ]
     }
 
@@ -166,8 +195,8 @@ def op_check_kb(channel_id):
     if link:
         return {
             "inline_keyboard": [
-                [{"text": "ПОДПИСАТЬСЯ", "url": link, "icon_custom_emoji_id": "5927118708873892465"}],
-                [{"text": "ПРОВЕРИТЬ", "callback_data": f"op_check_{channel_id}", "icon_custom_emoji_id": "5774022692642492953"}]
+                [{"text": "🔔 ПОДПИСАТЬСЯ", "url": link}],
+                [{"text": "✅ ПРОВЕРИТЬ", "callback_data": f"op_check_{channel_id}"}]
             ]
         }
     return None
@@ -175,316 +204,209 @@ def op_check_kb(channel_id):
 def channel_check_kb():
     return {
         "inline_keyboard": [
-            [{"text": "ПОДПИСАТЬСЯ", "url": "https://t.me/OfficialPlutonium", "icon_custom_emoji_id": "5927118708873892465"}],
-            [{"text": "ПРОВЕРИТЬ", "callback_data": "channel_check", "icon_custom_emoji_id": "5774022692642492953"}]
+            [{"text": "🔔 ПОДПИСАТЬСЯ", "url": "https://t.me/OfficialPlutonium"}],
+            [{"text": "✅ ПРОВЕРИТЬ", "callback_data": "channel_check"}]
         ]
     }
 
 def ban_kb(target_id):
     return {
         "inline_keyboard": [
-            [{"text": "🔒 ЗАБАНИТЬ", "callback_data": f"ban_do_{target_id}", "icon_custom_emoji_id": "6030563507299160824"}],
-            [{"text": "🔓 РАЗБАНИТЬ", "callback_data": f"unban_do_{target_id}", "icon_custom_emoji_id": "6028205772117118673"}],
-            [{"text": "❌ Отмена", "callback_data": "a_ban", "icon_custom_emoji_id": "5774022692642492953"}]
+            [{"text": "🔒 ЗАБАНИТЬ", "callback_data": f"ban_do_{target_id}"}],
+            [{"text": "🔓 РАЗБАНИТЬ", "callback_data": f"unban_do_{target_id}"}],
+            [{"text": "❌ Отмена", "callback_data": "a_ban"}]
         ]
     }
 
 def file_footer_kb():
     return {
         "inline_keyboard": [
-            [{"text": "Plutonium", "url": "https://t.me/OfficialPlutonium", "icon_custom_emoji_id": "5339472242529045815"}]
+            [{"text": "💜 Plutonium", "url": "https://t.me/OfficialPlutonium"}]
         ]
+    }
+
+def yes_no_kb():
+    return {
+        "keyboard": [[{"text": "✅ ДА"}, {"text": "❌ НЕТ"}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
     }
 
 # --- ТЕКСТЫ ---
 def get_welcome_text():
-    return ("<tg-emoji emoji-id=\"6041921818896372382\">👋</tg-emoji> Привет!\n"
-            "<tg-emoji emoji-id=\"5289930378885214069\">🙂</tg-emoji> Я храню файлы с канала @OfficialPlutonium\n"
-            "<tg-emoji emoji-id=\"6037157012242960559\">👇</tg-emoji> Используй кнопки ниже для навигации")
+    return "👋 Привет!\n🙂 Я храню файлы с канала @OfficialPlutonium\n👇 Используй кнопки ниже для навигации"
 
 def get_subscribe_text():
-    return ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
-            "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись на канал @OfficialPlutonium для доступа!")
+    return "🔒 Привет!\n🔓 Подпишись на канал @OfficialPlutonium для доступа!"
 
 def get_op_text():
-    return ("<tg-emoji emoji-id=\"6037249452824072506\">🔒</tg-emoji> Привет!\n"
-            "<tg-emoji emoji-id=\"6039630677182254664\">🔓</tg-emoji> Подпишись для доступа!")
+    return "🔒 Привет!\n🔓 Подпишись для доступа!"
 
 def get_profile_text(uid, first_name, username, downloads):
-    return (f"<tg-emoji emoji-id=\"6032693626394382504\">👤</tg-emoji> Профиль\n\n"
-            f"<tg-emoji emoji-id=\"5886505193180239900\">🆔</tg-emoji> ID: <code>{uid}</code>\n"
-            f"<tg-emoji emoji-id=\"5879770735999717115\">📛</tg-emoji> Имя: {first_name}\n"
-            f"<tg-emoji emoji-id=\"5814247475141153332\">🔖</tg-emoji> Username: @{username}\n"
-            f"<tg-emoji emoji-id=\"6039802767931871481\">📥</tg-emoji> Файлов получено: {downloads}")
+    return (f"👤 Профиль\n\n"
+            f"🆔 ID: <code>{uid}</code>\n"
+            f"📛 Имя: {first_name}\n"
+            f"🔖 Username: @{username}\n"
+            f"📥 Файлов получено: {downloads}")
 
 def get_help_text():
-    return ("<tg-emoji emoji-id=\"5208957270259425030\">❓</tg-emoji> Помощь\n\n"
-            "<tg-emoji emoji-id=\"5794164805065514131\">1️⃣</tg-emoji> Нажми Игры\n"
-            "<tg-emoji emoji-id=\"5794085322400733645\">2️⃣</tg-emoji> Выбери игру\n"
-            "<tg-emoji emoji-id=\"5794280000383358988\">3️⃣</tg-emoji> Нажми на название чита\n"
-            "<tg-emoji emoji-id=\"5794241397217304511\">4️⃣</tg-emoji> Файл автоматически отправится\n\n"
-            "<tg-emoji emoji-id=\"6032693626394382504\">📌</tg-emoji> Для админов есть дополнительные функции.")
+    return ("❓ Помощь\n\n"
+            "1️⃣ Нажми Игры\n"
+            "2️⃣ Выбери игру\n"
+            "3️⃣ Нажми на название чита\n"
+            "4️⃣ Файл автоматически отправится\n\n"
+            "📌 Для админов есть дополнительные функции.")
 
 def get_file_footer(name, description):
     if description:
-        return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}\n\n"
+        return (f"📤 Ваш Файл: {name}\n\n"
                 f"📝 {description}\n\n"
-                f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
+                f"🏪 Buy plutonium - @PlutoniumllcBot")
     else:
-        return (f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Ваш Файл: {name}\n\n"
-                f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
+        return (f"📤 Ваш Файл: {name}\n\n"
+                f"🏪 Buy plutonium - @PlutoniumllcBot")
 
 def get_add_file_success(name, description, game, file_link):
-    return (f"<tg-emoji emoji-id=\"6039391078136681499\">✅</tg-emoji> Файл добавлен!\n\n"
-            f"<tg-emoji emoji-id=\"5257965174979042426\">📄</tg-emoji> Название: {name}\n"
-            f"<tg-emoji emoji-id=\"5938413566624272793\">📝</tg-emoji> Описание: {description}\n"
-            f"<tg-emoji emoji-id=\"6028171274939797252\">🎮</tg-emoji> Игра: {game.upper()}\n"
-            f"<tg-emoji emoji-id=\"5974220038956124904\">🔗</tg-emoji> Ссылка: {file_link}\n"
-            f"<tg-emoji emoji-id=\"6039573425268201570\">📥</tg-emoji> Скачиваний: 0\n\n"
-            f"<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> При выдаче файла будет:\n"
-            f"<tg-emoji emoji-id=\"5920332557466997677\">🏪</tg-emoji> Buy plutonium - @PlutoniumllcBot")
+    return (f"✅ Файл добавлен!\n\n"
+            f"📄 Название: {name}\n"
+            f"📝 Описание: {description}\n"
+            f"🎮 Игра: {game.upper()}\n"
+            f"🔗 Ссылка: {file_link}\n"
+            f"📥 Скачиваний: 0\n\n"
+            f"📤 При выдаче файла будет:\n"
+            f"🏪 Buy plutonium - @PlutoniumllcBot")
 
 def get_add_file_prompt():
-    return ("<tg-emoji emoji-id=\"6039573425268201570\">📤</tg-emoji> Отправь файл\n\n"
-            "<tg-emoji emoji-id=\"6037373985400819577\">👤</tg-emoji> В подписи укажи:\n"
+    return ("📤 Отправь файл\n\n"
+            "👤 В подписи укажи:\n"
             "Название | #игра | Описание\n\n"
-            "<tg-emoji emoji-id=\"6039348811363520645\">💜</tg-emoji> Пример: Aimbot | #standoff | Лучший чит для Standoff 2\n\n"
-            "<tg-emoji emoji-id=\"6041730074376410123\">☃️</tg-emoji> Доступные игры:\n"
+            "💜 Пример: Aimbot | #standoff | Лучший чит для Standoff 2\n\n"
+            "☃️ Доступные игры:\n"
             "#standoff - Standoff 2\n"
             "#pubg - Pubg Mobile\n"
             "#other - Other Games")
 
 def get_broadcast_prompt():
-    return ("<tg-emoji emoji-id=\"6039422865189638057\">📢</tg-emoji> Рассылка\n\n"
-            "<tg-emoji emoji-id=\"5904248647972820334\">😎</tg-emoji> Отправь сообщение для рассылки.\n\n"
-            "<tg-emoji emoji-id=\"6028338546736107668\">🤝</tg-emoji> Поддерживается TG Premium эмодзи.\n\n"
+    return ("📢 Рассылка\n\n"
+            "😎 Отправь сообщение для рассылки.\n\n"
+            "🤝 Поддерживается TG Premium эмодзи.\n\n"
             "/cancel - отмена")
 
 def get_broadcast_success(sent):
-    return (f"<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Рассылка завершена!\n\n"
-            f"<tg-emoji emoji-id=\"6030776052345737530\">💜</tg-emoji> Отправлено: {sent} пользователям")
+    return f"✅ Рассылка завершена!\n\n💜 Отправлено: {sent} пользователям"
 
 def get_ad_prompt():
-    return ("<tg-emoji emoji-id=\"6039422865189638057\">📢</tg-emoji> Размещение рекламы\n\n"
-            "<tg-emoji emoji-id=\"5904248647972820334\">🤝</tg-emoji> Отправь пост для рекламы.\n\n"
-            "<tg-emoji emoji-id=\"6028338546736107668\">😂</tg-emoji> Поддерживается TG Premium эмодзи.")
+    return ("📢 Размещение рекламы\n\n"
+            "🤝 Отправь пост для рекламы.\n\n"
+            "😂 Поддерживается TG Premium эмодзи.")
 
 def get_ad_time_prompt():
-    return ("<tg-emoji emoji-id=\"6039454987250044861\">⏱️</tg-emoji> Введи время в часах (от 1 до 72):\n\nПример: 24")
+    return ("⏱️ Введи время в часах (от 1 до 72):\n\nПример: 24")
 
 def get_ad_success(sent, hours):
-    return (f"<tg-emoji emoji-id=\"5938252440926163756\">✅</tg-emoji> Реклама отправлена {sent} пользователям\n\n"
-            f"<tg-emoji emoji-id=\"5891100675042974129\">🦈</tg-emoji> Удаление через {hours} часов")
+    return f"✅ Реклама отправлена {sent} пользователям\n\n🦈 Удаление через {hours} часов"
 
 def get_op_prompt():
-    return ("<tg-emoji emoji-id=\"6028171274939797252\">🔗</tg-emoji> Создание ОП\n\n"
-            "<tg-emoji emoji-id=\"5895364284782743985\">🦍</tg-emoji> Введи ID канала для обязательной подписки.\n\n"
-            "<tg-emoji emoji-id=\"5769289093221454192\">🇺🇸</tg-emoji> Пример: -1001234567890")
+    return ("🔗 Создание ОП\n\n"
+            "🦍 Введи ID канала для обязательной подписки.\n\n"
+            "🇺🇸 Пример: -1001234567890\n\n"
+            "💡 Чтобы получить ID канала:\n"
+            "1. Добавь бота @getmyid_bot в канал\n"
+            "2. Напиши /start в канале\n"
+            "3. Скопируй ID")
 
 def get_op_success(channel_id, link):
-    return (f"<tg-emoji emoji-id=\"5938252440926163756\">✅</tg-emoji> ОП создана!\n\n"
-            f"<tg-emoji emoji-id=\"5776424837786374634\">⭐</tg-emoji> Канал ID: {channel_id}\n"
-            f"<tg-emoji emoji-id=\"6028171274939797252\">🔥</tg-emoji> Ссылка: {link}")
+    return f"✅ ОП создана!\n\n⭐ Канал ID: {channel_id}\n🔥 Ссылка: {link}"
 
 def get_ban_prompt():
-    return ("<tg-emoji emoji-id=\"6030563507299160824\">🚫</tg-emoji> Бан/Разбан пользователя\n\n"
-            "<tg-emoji emoji-id=\"6028205772117118673\">😎</tg-emoji> Отправь ID или username.\n\n"
-            "<tg-emoji emoji-id=\"5774022692642492953\">🤍</tg-emoji> Пример: 1471307057 или @username")
+    return ("🚫 Бан/Разбан пользователя\n\n"
+            "😎 Отправь ID или username.\n\n"
+            "🤍 Пример: 1471307057 или @username")
 
 def get_admin_prompt():
-    return ("<tg-emoji emoji-id=\"5924722061288150929\">👑</tg-emoji> Управление админами\n\n"
-            "<tg-emoji emoji-id=\"6028205772117118673\">💜</tg-emoji> Отправь ID или username.\n\n"
-            "<tg-emoji emoji-id=\"5774022692642492953\">✅</tg-emoji> Пример: 1471307057 или @username")
+    return ("👑 Управление админами\n\n"
+            "💜 Отправь ID или username.\n\n"
+            "✅ Пример: 1471307057 или @username")
 
 def get_ban_success(target_id):
-    return f"<tg-emoji emoji-id=\"6030563507299160824\">✅</tg-emoji> Пользователь {target_id} забанен"
+    return f"✅ Пользователь {target_id} забанен"
     
 def get_unban_success(target_id):
-    return f"<tg-emoji emoji-id=\"6028205772117118673\">✅</tg-emoji> Пользователь {target_id} разбанен"
+    return f"✅ Пользователь {target_id} разбанен"
 
-# --- ХРАНИЛИЩА ---
-waiting = {}
-processed_hashes = set()
+def get_db_prompt():
+    return ("📦 Выгрузка базы данных\n\n"
+            "⏳ Подожди, создаю бэкап...\n"
+            "💾 Файл будет отправлен через несколько секунд")
 
-# --- ФУНКЦИЯ ОТПРАВКИ С ЭНТИТИС (ДЛЯ РАССЫЛКИ) ---
-def send_with_entities(chat_id, message_data):
-    try:
-        if 'text' in message_data:
-            data = {"chat_id": chat_id, "text": message_data['text']}
-            if 'entities' in message_data:
-                data["entities"] = message_data['entities']
-            return api("sendMessage", data)
-        elif 'caption' in message_data:
-            data = {
-                "chat_id": chat_id,
-                "photo": message_data['photo'][-1]['file_id'],
-                "caption": message_data['caption']
-            }
-            if 'caption_entities' in message_data:
-                data["caption_entities"] = message_data['caption_entities']
-            return api("sendPhoto", data)
-    except Exception as e:
-        logger.error(f"Send with entities error: {e}")
-        return None
+def get_db_error():
+    return "❌ Ошибка при создании бэкапа базы данных"
 
-# --- СОХРАНЕНИЕ СООБЩЕНИЯ ДЛЯ РАССЫЛКИ ---
+# --- ФУНКЦИИ ДЛЯ РАБОТЫ С СООБЩЕНИЯМИ ---
+def save_entities(entities):
+    saved_entities = []
+    for e in entities:
+        entity = {
+            'offset': e['offset'],
+            'length': e['length'],
+            'type': e['type']
+        }
+        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
+            entity['custom_emoji_id'] = e['custom_emoji_id']
+        if e['type'] == 'text_link' and 'url' in e:
+            entity['url'] = e['url']
+        if e['type'] == 'text_mention' and 'user' in e:
+            entity['user'] = {'id': e['user']['id']}
+        saved_entities.append(entity)
+    return saved_entities
+
 def save_broadcast_message(user_id, message, chat_id):
     try:
-        msg_data = {}
+        msg_data = {'type': None}
         
         if 'text' in message:
             msg_data['type'] = 'text'
             msg_data['text'] = message['text']
             if 'entities' in message:
-                msg_data['entities'] = []
-                for e in message['entities']:
-                    entity = {
-                        'offset': e['offset'],
-                        'length': e['length'],
-                        'type': e['type']
-                    }
-                    if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
-                        entity['custom_emoji_id'] = e['custom_emoji_id']
-                    if e['type'] == 'text_link' and 'url' in e:
-                        entity['url'] = e['url']
-                    if e['type'] == 'text_mention' and 'user' in e:
-                        entity['user'] = {'id': e['user']['id']}
-                    msg_data['entities'].append(entity)
-        
+                msg_data['entities'] = save_entities(message['entities'])
+                
         elif 'photo' in message:
             msg_data['type'] = 'photo'
             msg_data['photo'] = message['photo']
-            if 'caption' in message:
-                msg_data['caption'] = message['caption']
-                if 'caption_entities' in message:
-                    msg_data['caption_entities'] = []
-                    for e in message['caption_entities']:
-                        entity = {
-                            'offset': e['offset'],
-                            'length': e['length'],
-                            'type': e['type']
-                        }
-                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
-                            entity['custom_emoji_id'] = e['custom_emoji_id']
-                        if e['type'] == 'text_link' and 'url' in e:
-                            entity['url'] = e['url']
-                        if e['type'] == 'text_mention' and 'user' in e:
-                            entity['user'] = {'id': e['user']['id']}
-                        msg_data['caption_entities'].append(entity)
-        
+            msg_data['caption'] = message.get('caption', '')
+            if 'caption_entities' in message:
+                msg_data['caption_entities'] = save_entities(message['caption_entities'])
+                
         elif 'video' in message:
             msg_data['type'] = 'video'
             msg_data['video'] = message['video']['file_id']
-            if 'caption' in message:
-                msg_data['caption'] = message['caption']
-                if 'caption_entities' in message:
-                    msg_data['caption_entities'] = []
-                    for e in message['caption_entities']:
-                        entity = {
-                            'offset': e['offset'],
-                            'length': e['length'],
-                            'type': e['type']
-                        }
-                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
-                            entity['custom_emoji_id'] = e['custom_emoji_id']
-                        if e['type'] == 'text_link' and 'url' in e:
-                            entity['url'] = e['url']
-                        if e['type'] == 'text_mention' and 'user' in e:
-                            entity['user'] = {'id': e['user']['id']}
-                        msg_data['caption_entities'].append(entity)
-        
+            msg_data['caption'] = message.get('caption', '')
+            if 'caption_entities' in message:
+                msg_data['caption_entities'] = save_entities(message['caption_entities'])
+                
         elif 'document' in message:
             msg_data['type'] = 'document'
             msg_data['document'] = message['document']['file_id']
-            if 'caption' in message:
-                msg_data['caption'] = message['caption']
-                if 'caption_entities' in message:
-                    msg_data['caption_entities'] = []
-                    for e in message['caption_entities']:
-                        entity = {
-                            'offset': e['offset'],
-                            'length': e['length'],
-                            'type': e['type']
-                        }
-                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
-                            entity['custom_emoji_id'] = e['custom_emoji_id']
-                        if e['type'] == 'text_link' and 'url' in e:
-                            entity['url'] = e['url']
-                        if e['type'] == 'text_mention' and 'user' in e:
-                            entity['user'] = {'id': e['user']['id']}
-                        msg_data['caption_entities'].append(entity)
-        
-        elif 'video' in message:
-            msg_data['type'] = 'video'
-            msg_data['video'] = message['video']['file_id']
-            if 'caption' in message:
-                msg_data['caption'] = message['caption']
-                if 'caption_entities' in message:
-                    msg_data['caption_entities'] = []
-                    for e in message['caption_entities']:
-                        entity = {
-                            'offset': e['offset'],
-                            'length': e['length'],
-                            'type': e['type']
-                        }
-                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
-                            entity['custom_emoji_id'] = e['custom_emoji_id']
-                        if e['type'] == 'text_link' and 'url' in e:
-                            entity['url'] = e['url']
-                        if e['type'] == 'text_mention' and 'user' in e:
-                            entity['user'] = {'id': e['user']['id']}
-                        msg_data['caption_entities'].append(entity)
-        
-        elif 'document' in message:
-            msg_data['type'] = 'document'
-            msg_data['document'] = message['document']['file_id']
-            if 'caption' in message:
-                msg_data['caption'] = message['caption']
-                if 'caption_entities' in message:
-                    msg_data['caption_entities'] = []
-                    for e in message['caption_entities']:
-                        entity = {
-                            'offset': e['offset'],
-                            'length': e['length'],
-                            'type': e['type']
-                        }
-                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
-                            entity['custom_emoji_id'] = e['custom_emoji_id']
-                        if e['type'] == 'text_link' and 'url' in e:
-                            entity['url'] = e['url']
-                        if e['type'] == 'text_mention' and 'user' in e:
-                            entity['user'] = {'id': e['user']['id']}
-                        msg_data['caption_entities'].append(entity)
+            msg_data['caption'] = message.get('caption', '')
+            if 'caption_entities' in message:
+                msg_data['caption_entities'] = save_entities(message['caption_entities'])
         
         elif 'animation' in message:
             msg_data['type'] = 'animation'
             msg_data['animation'] = message['animation']['file_id']
-            if 'caption' in message:
-                msg_data['caption'] = message['caption']
-                if 'caption_entities' in message:
-                    msg_data['caption_entities'] = []
-                    for e in message['caption_entities']:
-                        entity = {
-                            'offset': e['offset'],
-                            'length': e['length'],
-                            'type': e['type']
-                        }
-                        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
-                            entity['custom_emoji_id'] = e['custom_emoji_id']
-                        if e['type'] == 'text_link' and 'url' in e:
-                            entity['url'] = e['url']
-                        if e['type'] == 'text_mention' and 'user' in e:
-                            entity['user'] = {'id': e['user']['id']}
-                        msg_data['caption_entities'].append(entity)
+            msg_data['caption'] = message.get('caption', '')
+            if 'caption_entities' in message:
+                msg_data['caption_entities'] = save_entities(message['caption_entities'])
         
-        waiting[f"{user_id}_broadcast"] = json.dumps(msg_data, ensure_ascii=False)
-        logger.info(f"Saved broadcast message type: {msg_data.get('type')}")
-        return True
+        if msg_data['type']:
+            waiting[f"{user_id}_broadcast"] = json.dumps(msg_data, ensure_ascii=False)
+            logger.info(f"Saved broadcast message type: {msg_data['type']}")
+            return True
+            
     except Exception as e:
         logger.error(f"Save broadcast error: {e}")
-        return False
+    return False
 
-# --- ОТПРАВКА РАССЫЛКИ ---
 def send_broadcast(msg_data):
     users = conn.execute("SELECT user_id FROM users WHERE banned = 0").fetchall()
     sent = 0
@@ -534,6 +456,10 @@ def send_broadcast(msg_data):
         time.sleep(0.05)
     
     return sent
+
+# --- ХРАНИЛИЩА ---
+waiting = {}
+processed_hashes = set()
 
 # --- ОБРАБОТКА CALLBACK ---
 def handle_cb(cb):
@@ -744,6 +670,7 @@ def main():
     logger.info(f"👑 Владелец: {OWNER_ID}")
     logger.info(f"📢 Канал подписки ID: {CHANNEL_ID}")
     logger.info(f"💾 Канал хранения ID: {STORAGE_CHANNEL_ID}")
+    logger.info(f"🗄️ База данных: {'Turso' if USE_TURSO else 'Локальная SQLite'}")
     api("deleteWebhook", {"drop_pending_updates": True})
     offset = 0
     
@@ -788,6 +715,43 @@ def main():
                 conn.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (int(time.time()), uid))
                 conn.commit()
                 
+                # --- КОМАНДА ПОЛУЧЕНИЯ БАЗЫ ДАННЫХ ---
+                if text == "/getdb":
+                    if not is_admin(uid):
+                        api("sendMessage", {"chat_id": uid, "text": "⛔ У вас нет прав для этой команды!"})
+                        continue
+                    
+                    api("sendMessage", {"chat_id": uid, "text": "📦 Выгрузка базы данных\n\n⏳ Подожди, создаю бэкап...\n💾 Файл будет отправлен через несколько секунд", "parse_mode": "HTML"})
+                    
+                    try:
+                        if USE_TURSO:
+                            temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+                            temp_db.close()
+                            
+                            backup_conn = sqlite3.connect(temp_db.name)
+                            conn.backup(backup_conn)
+                            backup_conn.close()
+                            
+                            with open(temp_db.name, 'rb') as f:
+                                api("sendDocument", {
+                                    "chat_id": uid,
+                                    "document": f.read(),
+                                    "caption": f"📦 Бэкап базы данных\n🕐 {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                })
+                            
+                            os.unlink(temp_db.name)
+                        else:
+                            with open(DB_PATH, 'rb') as f:
+                                api("sendDocument", {
+                                    "chat_id": uid,
+                                    "document": f.read(),
+                                    "caption": f"📦 Бэкап базы данных\n🕐 {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                })
+                    except Exception as e:
+                        logger.error(f"GetDB error: {e}")
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Ошибка при создании бэкапа базы данных"})
+                    continue
+                
                 # --- ОЖИДАНИЯ ---
                 
                 # Добавление файла
@@ -830,25 +794,42 @@ def main():
                     waiting[uid] = None
                     continue
                 
-                # ОП - получение ID канала
+                # ОП - получение ID канала (ИСПРАВЛЕНО)
                 elif waiting.get(uid) == "op_channel_id" and text:
                     try:
-                        channel_id = int(text.strip())
+                        channel_id_str = text.strip()
+                        channel_id = int(channel_id_str)
+                        
+                        logger.info(f"Проверка канала: {channel_id}")
+                        
+                        check_result = api("getChat", {"chat_id": channel_id})
+                        
+                        if not check_result.get('ok'):
+                            api("sendMessage", {"chat_id": uid, "text": f"❌ Канал не найден!\n\nОшибка: {check_result.get('description', 'Неизвестная ошибка')}\n\n💡 Чтобы получить ID канала:\n1. Добавь бота @getmyid_bot в канал\n2. Напиши /start в канале\n3. Скопируй ID (начинается с -100)"})
+                            waiting[uid] = None
+                            continue
+                        
                         link = get_channel_link(channel_id)
+                        
                         if link:
                             conn.execute("UPDATE op_settings SET active = 0")
                             conn.execute("INSERT INTO op_settings (channel_id, target, current, active, link) VALUES (?, 0, 0, 1, ?)", 
                                         (channel_id, link))
                             conn.commit()
                             api("sendMessage", {"chat_id": uid, "text": get_op_success(channel_id, link), "parse_mode": "HTML"})
+                            logger.info(f"ОП создана для канала {channel_id}")
                         else:
-                            api("sendMessage", {"chat_id": uid, "text": "❌ Не удалось получить ссылку на канал"})
-                    except:
-                        api("sendMessage", {"chat_id": uid, "text": "❌ Отправь корректный ID канала!\n\nПример: -1001234567890"})
+                            api("sendMessage", {"chat_id": uid, "text": "❌ Не удалось получить ссылку на канал.\n\nУбедись, что канал публичный или у бота есть права администратора."})
+                    except ValueError:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Отправь корректный ID канала!\n\nПример: -1001234567890\n\nID должен начинаться с -100"})
+                    except Exception as e:
+                        logger.error(f"OP creation error: {e}")
+                        api("sendMessage", {"chat_id": uid, "text": f"❌ Ошибка: {str(e)}"})
+                    
                     waiting[uid] = None
                     continue
                 
-                # Реклама
+                                # Реклама
                 elif waiting.get(uid) == "ad_post" and (text or m.get('caption')):
                     waiting[uid] = "ad_time"
                     msg_data = {
@@ -1038,10 +1019,11 @@ def main():
                     if f_hash in processed_hashes:
                         continue
                     processed_hashes.add(f_hash)
+                    threading.Timer(5, lambda: processed_hashes.discard(f_hash)).start()
                     
                     f = conn.execute("SELECT * FROM files WHERE hash = ?", (f_hash,)).fetchone()
                     if f:
-                        api("sendMessage", {"chat_id": uid, "text": "<tg-emoji emoji-id=\"6037373985400819577\">📤</tg-emoji> Отправляю файл!", "parse_mode": "HTML"})
+                        api("sendMessage", {"chat_id": uid, "text": "📤 Отправляю файл!", "parse_mode": "HTML"})
                         
                         cap = get_file_footer(f['name'], f['description'])
                         api("copyMessage", {
@@ -1055,9 +1037,6 @@ def main():
                         conn.execute("UPDATE users SET downloads = downloads + 1 WHERE user_id = ?", (uid,))
                         conn.execute("UPDATE files SET downloads = downloads + 1 WHERE hash = ?", (f_hash,))
                         conn.commit()
-                    
-                    time.sleep(5)
-                    processed_hashes.discard(f_hash)
             
             time.sleep(0.5)
             
