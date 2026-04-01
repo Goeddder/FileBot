@@ -6,9 +6,7 @@ import logging
 import urllib.request
 import time
 import threading
-import re
 import tempfile
-import subprocess
 
 # --- НАСТРОЙКИ ---
 BOT_TOKEN = "8071432823:AAHh27N0UVMpt3grjhL0XX_XypAncrF8Mi8"
@@ -37,7 +35,7 @@ if USE_TURSO:
         conn.execute("PRAGMA journal_mode=WAL")
         logger.info("✅ Подключено к Turso")
     except ImportError:
-        logger.error("❌ libsql_experimental не установлен, использую локальную SQLite")
+        logger.error("❌ libsql_experimental не установлен")
         USE_TURSO = False
         conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
 else:
@@ -48,22 +46,54 @@ conn.row_factory = sqlite3.Row
 
 def init_db():
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS files (hash TEXT PRIMARY KEY, file_id INTEGER, name TEXT, description TEXT, game TEXT, ts INTEGER, created_by INTEGER, downloads INTEGER DEFAULT 0)")
-    c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, downloads INTEGER DEFAULT 0, banned INTEGER DEFAULT 0, last_active INTEGER DEFAULT 0)")
-    c.execute("CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY, perms TEXT, added_by INTEGER)")
-    c.execute("CREATE TABLE IF NOT EXISTS op_settings (id INTEGER PRIMARY KEY, channel_id INTEGER, target INTEGER, current INTEGER DEFAULT 0, active INTEGER DEFAULT 0, link TEXT)")
-    c.execute("CREATE TABLE IF NOT EXISTS ads (msg_id INTEGER PRIMARY KEY, chat_id INTEGER, expire INTEGER, message_data TEXT)")
-    c.execute("INSERT OR IGNORE INTO admins (user_id, perms, added_by) VALUES (?, ?, ?)", (OWNER_ID, '["all"]', OWNER_ID))
+    c.execute("""CREATE TABLE IF NOT EXISTS files (
+        hash TEXT PRIMARY KEY, 
+        file_id INTEGER, 
+        name TEXT, 
+        description TEXT, 
+        game TEXT, 
+        ts INTEGER, 
+        created_by INTEGER, 
+        downloads INTEGER DEFAULT 0
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY, 
+        username TEXT, 
+        first_name TEXT, 
+        downloads INTEGER DEFAULT 0, 
+        banned INTEGER DEFAULT 0, 
+        last_active INTEGER DEFAULT 0
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS admins (
+        user_id INTEGER PRIMARY KEY, 
+        perms TEXT, 
+        added_by INTEGER
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS op_settings (
+        id INTEGER PRIMARY KEY, 
+        channel_id INTEGER, 
+        target INTEGER DEFAULT 0, 
+        current INTEGER DEFAULT 0, 
+        active INTEGER DEFAULT 0, 
+        link TEXT
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS ads (
+        msg_id INTEGER PRIMARY KEY, 
+        chat_id INTEGER, 
+        expire INTEGER, 
+        message_data TEXT
+    )""")
+    c.execute("INSERT OR IGNORE INTO admins (user_id, perms, added_by) VALUES (?, ?, ?)", 
+              (OWNER_ID, '["all"]', OWNER_ID))
     conn.commit()
     logger.info("✅ База данных готова")
 
 init_db()
 
-# --- ФУНКЦИИ API ---
-def api(method, data=None):
+# --- ФУНКЦИИ API С ПОВТОРАМИ ---
+def api(method, data=None, retry=3):
     url = f"{API_URL}/{method}"
-    max_retries = 3
-    for attempt in range(max_retries):
+    for attempt in range(retry):
         try:
             req = urllib.request.Request(
                 url,
@@ -74,10 +104,10 @@ def api(method, data=None):
             with urllib.request.urlopen(req, timeout=30) as response:
                 return json.loads(response.read().decode())
         except Exception as e:
-            logger.error(f"API error (attempt {attempt+1}): {e}")
-            if attempt == max_retries - 1:
+            logger.error(f"API error ({method}): {e}")
+            if attempt == retry - 1:
                 return {'ok': False}
-            time.sleep(2 ** attempt)
+            time.sleep(1)
     return {'ok': False}
 
 def has_perm(uid, perm):
@@ -97,12 +127,15 @@ def is_admin(uid):
 # --- ТАЙМЕР УДАЛЕНИЯ РЕКЛАМЫ ---
 def ad_cleaner():
     while True:
-        now = int(time.time())
-        expired = conn.execute("SELECT * FROM ads WHERE expire < ?", (now,)).fetchall()
-        for ad in expired:
-            api("deleteMessage", {"chat_id": ad['chat_id'], "message_id": ad['msg_id']})
-            conn.execute("DELETE FROM ads WHERE msg_id = ?", (ad['msg_id'],))
-        conn.commit()
+        try:
+            now = int(time.time())
+            expired = conn.execute("SELECT * FROM ads WHERE expire < ?", (now,)).fetchall()
+            for ad in expired:
+                api("deleteMessage", {"chat_id": ad['chat_id'], "message_id": ad['msg_id']})
+                conn.execute("DELETE FROM ads WHERE msg_id = ?", (ad['msg_id'],))
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Ad cleaner error: {e}")
         time.sleep(30)
 
 threading.Thread(target=ad_cleaner, daemon=True).start()
@@ -115,8 +148,7 @@ def check_subscription(user_id, channel_id):
             status = result['result']['status']
             return status in ['member', 'administrator', 'creator']
         return False
-    except Exception as e:
-        logger.error(f"Check subscription error: {e}")
+    except:
         return False
 
 def get_channel_link(channel_id):
@@ -130,8 +162,7 @@ def get_channel_link(channel_id):
             if invite_link:
                 return invite_link
         return None
-    except Exception as e:
-        logger.error(f"Get channel link error: {e}")
+    except:
         return None
 
 # --- КЛАВИАТУРЫ ---
@@ -232,6 +263,14 @@ def yes_no_kb():
         "one_time_keyboard": True
     }
 
+def op_setup_kb():
+    return {
+        "inline_keyboard": [
+            [{"text": "✅ Завершить настройку ОП", "callback_data": "op_finish"}],
+            [{"text": "❌ Отмена", "callback_data": "to_main"}]
+        ]
+    }
+
 # --- ТЕКСТЫ ---
 def get_welcome_text():
     return "👋 Привет!\n🙂 Я храню файлы с канала @OfficialPlutonium\n👇 Используй кнопки ниже для навигации"
@@ -272,9 +311,7 @@ def get_add_file_success(name, description, game, file_link):
             f"📝 Описание: {description}\n"
             f"🎮 Игра: {game.upper()}\n"
             f"🔗 Ссылка: {file_link}\n"
-            f"📥 Скачиваний: 0\n\n"
-            f"📤 При выдаче файла будет:\n"
-            f"🏪 Buy plutonium - @PlutoniumllcBot")
+            f"📥 Скачиваний: 0")
 
 def get_add_file_prompt():
     return ("📤 Отправь файл\n\n"
@@ -289,44 +326,43 @@ def get_add_file_prompt():
 def get_broadcast_prompt():
     return ("📢 Рассылка\n\n"
             "😎 Отправь сообщение для рассылки.\n\n"
-            "🤝 Поддерживается TG Premium эмодзи.\n\n"
             "/cancel - отмена")
 
 def get_broadcast_success(sent):
     return f"✅ Рассылка завершена!\n\n💜 Отправлено: {sent} пользователям"
 
 def get_ad_prompt():
-    return ("📢 Размещение рекламы\n\n"
-            "🤝 Отправь пост для рекламы.\n\n"
-            "😂 Поддерживается TG Premium эмодзи.")
+    return "📢 Отправь пост для рекламы.\n\n(Поддерживаются фото, видео, текст)"
 
 def get_ad_time_prompt():
-    return ("⏱️ Введи время в часах (от 1 до 72):\n\nПример: 24")
+    return "⏱️ Введи время в часах (от 1 до 72):\n\nПример: 24"
 
 def get_ad_success(sent, hours):
     return f"✅ Реклама отправлена {sent} пользователям\n\n🦈 Удаление через {hours} часов"
 
 def get_op_prompt():
-    return ("🔗 Создание ОП\n\n"
-            "🦍 Введи ID канала для обязательной подписки.\n\n"
-            "🇺🇸 Пример: -1001234567890\n\n"
-            "💡 Чтобы получить ID канала:\n"
-            "1. Добавь бота @getmyid_bot в канал\n"
-            "2. Напиши /start в канале\n"
-            "3. Скопируй ID")
+    return ("🔗 Создание ОП (обязательной подписки)\n\n"
+            "📝 Введи количество подписчиков, которое нужно набрать:\n"
+            "Пример: 100\n\n"
+            "После этого я попрошу ссылку на канал.")
 
-def get_op_success(channel_id, link):
-    return f"✅ ОП создана!\n\n⭐ Канал ID: {channel_id}\n🔥 Ссылка: {link}"
+def get_op_link_prompt():
+    return ("🔗 Отправь ссылку на канал или ID канала:\n\n"
+            "Примеры:\n"
+            "https://t.me/канал\n"
+            "-1001234567890")
+
+def get_op_target_prompt():
+    return "📊 Введи количество подписчиков, которое нужно набрать для ОП:\n\nПример: 100"
+
+def get_op_success(channel_id, link, target):
+    return f"✅ ОП создана!\n\n⭐ Канал: {link}\n🎯 Нужно набрать: {target} подписчиков\n📊 Текущий счетчик: 0\n\nКогда наберется {target} подписчиков, ОП автоматически отключится."
 
 def get_ban_prompt():
-    return ("🚫 Бан/Разбан пользователя\n\n"
-            "😎 Отправь ID или username.\n\n"
-            "🤍 Пример: 1471307057 или @username")
+    return "🚫 Отправь ID или username пользователя для бана/разбана.\n\nПример: 1471307057 или @username"
 
 def get_admin_prompt():
-    return ("👑 Управление админами\n\n"
-            "💜 Отправь ID или username.\n\n"
-            "✅ Пример: 1471307057 или @username")
+    return "👑 Отправь ID или username пользователя для управления правами.\n\nПример: 1471307057 или @username"
 
 def get_ban_success(target_id):
     return f"✅ Пользователь {target_id} забанен"
@@ -335,31 +371,12 @@ def get_unban_success(target_id):
     return f"✅ Пользователь {target_id} разбанен"
 
 def get_db_prompt():
-    return ("📦 Выгрузка базы данных\n\n"
-            "⏳ Подожди, создаю бэкап...\n"
-            "💾 Файл будет отправлен через несколько секунд")
+    return "📦 Создаю бэкап базы данных...\n⏳ Подожди немного..."
 
 def get_db_error():
     return "❌ Ошибка при создании бэкапа базы данных"
 
-# --- ФУНКЦИИ ДЛЯ РАБОТЫ С СООБЩЕНИЯМИ ---
-def save_entities(entities):
-    saved_entities = []
-    for e in entities:
-        entity = {
-            'offset': e['offset'],
-            'length': e['length'],
-            'type': e['type']
-        }
-        if e['type'] == 'custom_emoji' and 'custom_emoji_id' in e:
-            entity['custom_emoji_id'] = e['custom_emoji_id']
-        if e['type'] == 'text_link' and 'url' in e:
-            entity['url'] = e['url']
-        if e['type'] == 'text_mention' and 'user' in e:
-            entity['user'] = {'id': e['user']['id']}
-        saved_entities.append(entity)
-    return saved_entities
-
+# --- ФУНКЦИИ ДЛЯ РАССЫЛКИ ---
 def save_broadcast_message(user_id, message, chat_id):
     try:
         msg_data = {'type': None}
@@ -368,39 +385,39 @@ def save_broadcast_message(user_id, message, chat_id):
             msg_data['type'] = 'text'
             msg_data['text'] = message['text']
             if 'entities' in message:
-                msg_data['entities'] = save_entities(message['entities'])
+                msg_data['entities'] = message['entities']
                 
         elif 'photo' in message:
             msg_data['type'] = 'photo'
             msg_data['photo'] = message['photo']
             msg_data['caption'] = message.get('caption', '')
             if 'caption_entities' in message:
-                msg_data['caption_entities'] = save_entities(message['caption_entities'])
+                msg_data['caption_entities'] = message['caption_entities']
                 
         elif 'video' in message:
             msg_data['type'] = 'video'
             msg_data['video'] = message['video']['file_id']
             msg_data['caption'] = message.get('caption', '')
             if 'caption_entities' in message:
-                msg_data['caption_entities'] = save_entities(message['caption_entities'])
+                msg_data['caption_entities'] = message['caption_entities']
                 
         elif 'document' in message:
             msg_data['type'] = 'document'
             msg_data['document'] = message['document']['file_id']
             msg_data['caption'] = message.get('caption', '')
             if 'caption_entities' in message:
-                msg_data['caption_entities'] = save_entities(message['caption_entities'])
+                msg_data['caption_entities'] = message['caption_entities']
         
         elif 'animation' in message:
             msg_data['type'] = 'animation'
             msg_data['animation'] = message['animation']['file_id']
             msg_data['caption'] = message.get('caption', '')
             if 'caption_entities' in message:
-                msg_data['caption_entities'] = save_entities(message['caption_entities'])
+                msg_data['caption_entities'] = message['caption_entities']
         
         if msg_data['type']:
             waiting[f"{user_id}_broadcast"] = json.dumps(msg_data, ensure_ascii=False)
-            logger.info(f"Saved broadcast message type: {msg_data['type']}")
+            logger.info(f"Saved broadcast: {msg_data['type']}")
             return True
             
     except Exception as e:
@@ -443,16 +460,9 @@ def send_broadcast(msg_data):
                 if msg_data.get('caption_entities'):
                     data["caption_entities"] = msg_data['caption_entities']
                 api("sendDocument", data)
-            elif msg_type == 'animation':
-                data = {"chat_id": user['user_id'], "animation": msg_data['animation']}
-                if msg_data.get('caption'):
-                    data["caption"] = msg_data['caption']
-                if msg_data.get('caption_entities'):
-                    data["caption_entities"] = msg_data['caption_entities']
-                api("sendAnimation", data)
             sent += 1
         except Exception as e:
-            logger.error(f"Broadcast send error to {user['user_id']}: {e}")
+            logger.error(f"Broadcast error to {user['user_id']}: {e}")
         time.sleep(0.05)
     
     return sent
@@ -460,6 +470,7 @@ def send_broadcast(msg_data):
 # --- ХРАНИЛИЩА ---
 waiting = {}
 processed_hashes = set()
+op_temp = {}  # Временное хранение для создания ОП
 
 # --- ОБРАБОТКА CALLBACK ---
 def handle_cb(cb):
@@ -470,42 +481,112 @@ def handle_cb(cb):
     
     u = conn.execute("SELECT * FROM users WHERE user_id = ?", (uid,)).fetchone()
     
+    # Проверка подписки на основной канал
     if data == "channel_check":
         if check_subscription(uid, CHANNEL_ID):
-            api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": get_welcome_text(), "parse_mode": "HTML", "reply_markup": main_kb(uid)})
+            api("editMessageCaption", {
+                "chat_id": cid, 
+                "message_id": mid, 
+                "caption": get_welcome_text(), 
+                "parse_mode": "HTML", 
+                "reply_markup": main_kb(uid)
+            })
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
         else:
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
         return
     
+    # Проверка ОП
     if data.startswith("op_check_"):
         try:
             op_channel_id = int(data.split("_")[2])
             if check_subscription(uid, op_channel_id):
                 api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ Подписка подтверждена!"})
-                api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": get_welcome_text(), "parse_mode": "HTML", "reply_markup": main_kb(uid)})
+                api("editMessageCaption", {
+                    "chat_id": cid, 
+                    "message_id": mid, 
+                    "caption": get_welcome_text(), 
+                    "parse_mode": "HTML", 
+                    "reply_markup": main_kb(uid)
+                })
             else:
                 api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Вы еще не подписались!", "show_alert": True})
         except:
             pass
         return
     
+    # Завершение настройки ОП
+    if data == "op_finish":
+        if uid not in op_temp:
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Нет активной настройки ОП"})
+            return
+        
+        channel_id = op_temp[uid].get('channel_id')
+        target = op_temp[uid].get('target')
+        
+        if not channel_id or not target:
+            api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "❌ Не все данные заполнены"})
+            return
+        
+        link = get_channel_link(channel_id)
+        if link:
+            conn.execute("UPDATE op_settings SET active = 0")
+            conn.execute("INSERT INTO op_settings (channel_id, target, current, active, link) VALUES (?, ?, 0, 1, ?)", 
+                        (channel_id, target, link))
+            conn.commit()
+            api("sendMessage", {"chat_id": uid, "text": get_op_success(channel_id, link, target), "parse_mode": "HTML"})
+            logger.info(f"ОП создана: канал {channel_id}, цель {target}")
+        else:
+            api("sendMessage", {"chat_id": uid, "text": "❌ Не удалось получить ссылку на канал"})
+        
+        del op_temp[uid]
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "✅ ОП создана!"})
+        return
+    
+    # Назад в главное меню
     if data == "to_main":
-        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": get_welcome_text(), "parse_mode": "HTML", "reply_markup": main_kb(uid)})
+        api("editMessageCaption", {
+            "chat_id": cid, 
+            "message_id": mid, 
+            "caption": get_welcome_text(), 
+            "parse_mode": "HTML", 
+            "reply_markup": main_kb(uid)
+        })
         return
     
+    # Профиль
     if data == "menu_prof":
-        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": get_profile_text(uid, u['first_name'], u['username'], u['downloads']), "parse_mode": "HTML", "reply_markup": back_kb()})
+        api("editMessageCaption", {
+            "chat_id": cid, 
+            "message_id": mid, 
+            "caption": get_profile_text(uid, u['first_name'], u['username'], u['downloads']), 
+            "parse_mode": "HTML", 
+            "reply_markup": back_kb()
+        })
         return
     
+    # Помощь
     if data == "menu_help":
-        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": get_help_text(), "parse_mode": "HTML", "reply_markup": back_kb()})
+        api("editMessageCaption", {
+            "chat_id": cid, 
+            "message_id": mid, 
+            "caption": get_help_text(), 
+            "parse_mode": "HTML", 
+            "reply_markup": back_kb()
+        })
         return
     
+    # Меню игр
     if data == "menu_games":
-        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "🎮 Выберите игру:", "reply_markup": games_kb()})
+        api("editMessageCaption", {
+            "chat_id": cid, 
+            "message_id": mid, 
+            "caption": "🎮 Выберите игру:", 
+            "reply_markup": games_kb()
+        })
         return
     
+    # Выбор игры
     if data.startswith("game_"):
         game_map = {"so2": "standoff", "pubg": "pubg", "other": "other"}
         game_code = data.split("_")[1]
@@ -520,6 +601,7 @@ def handle_cb(cb):
             api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": cap, "reply_markup": back_kb()})
         return
     
+    # Скачивание файла
     if data.startswith("dl_"):
         f_hash = data.split("_")[1]
         f = conn.execute("SELECT * FROM files WHERE hash = ?", (f_hash,)).fetchone()
@@ -539,12 +621,19 @@ def handle_cb(cb):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": f"✅ {f['name']} отправлен!"})
         return
     
+    # Админ панель
     if data == "adm_root":
         if not is_admin(uid):
             return
-        api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ Админ панель Plutonium", "reply_markup": admin_kb(uid)})
+        api("editMessageCaption", {
+            "chat_id": cid, 
+            "message_id": mid, 
+            "caption": "⚡ Админ панель Plutonium", 
+            "reply_markup": admin_kb(uid)
+        })
         return
     
+    # Статистика
     if data == "a_stat":
         if not has_perm(uid, "all"):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
@@ -555,16 +644,19 @@ def handle_cb(cb):
         api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": f"👥 Юзеров: {uc}\n📥 Скачано: {dc}\n📁 Файлов: {fc}", "show_alert": True})
         return
     
+    # Очистка неактивных
     if data == "a_clean":
         if not has_perm(uid, "all"):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
             return
         now = int(time.time())
-        deleted = conn.execute("DELETE FROM users WHERE last_active < ? AND user_id NOT IN (SELECT user_id FROM admins)", (now - 30*24*3600,)).rowcount
+        deleted = conn.execute("DELETE FROM users WHERE last_active < ? AND user_id NOT IN (SELECT user_id FROM admins)", 
+                              (now - 30*24*3600,)).rowcount
         conn.commit()
         api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": f"Удалено неактивных: {deleted}", "show_alert": True})
         return
     
+    # Добавить файл
     if data == "a_addfile":
         if not has_perm(uid, "addfile") and not has_perm(uid, "all"):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
@@ -574,15 +666,17 @@ def handle_cb(cb):
         api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь файл"})
         return
     
+    # ОП (обязательная подписка)
     if data == "a_op":
         if not has_perm(uid, "all"):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
             return
-        waiting[uid] = "op_channel_id"
-        api("sendMessage", {"chat_id": cid, "text": get_op_prompt(), "parse_mode": "HTML"})
-        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Введи ID канала"})
+        waiting[uid] = "op_target"
+        api("sendMessage", {"chat_id": cid, "text": get_op_target_prompt(), "parse_mode": "HTML"})
+        api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Введи количество подписчиков"})
         return
     
+    # Реклама
     if data == "a_ads":
         if not has_perm(uid, "all"):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
@@ -592,6 +686,7 @@ def handle_cb(cb):
         api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь пост"})
         return
     
+    # Бан/Разбан
     if data == "a_ban":
         if not has_perm(uid, "all"):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
@@ -601,6 +696,7 @@ def handle_cb(cb):
         api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь ID или username"})
         return
     
+    # Рассылка
     if data == "a_broad":
         if not has_perm(uid, "all"):
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Нет прав", "show_alert": True})
@@ -610,6 +706,7 @@ def handle_cb(cb):
         api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь сообщение"})
         return
     
+    # Управление админами
     if data == "a_mng":
         if uid != OWNER_ID:
             api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Только для владельца", "show_alert": True})
@@ -619,6 +716,7 @@ def handle_cb(cb):
         api("answerCallbackQuery", {"callback_query_id": cb['id'], "text": "Отправь ID или username"})
         return
     
+    # Выбор прав для админа
     if data.startswith("perm_"):
         if uid != OWNER_ID:
             return
@@ -642,6 +740,7 @@ def handle_cb(cb):
         api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ Админ панель Plutonium", "reply_markup": admin_kb(uid)})
         return
     
+    # Забанить
     if data.startswith("ban_do_"):
         target_id = int(data.split("_")[2])
         if target_id == uid:
@@ -656,6 +755,7 @@ def handle_cb(cb):
         api("editMessageCaption", {"chat_id": cid, "message_id": mid, "caption": "⚡ Админ панель Plutonium", "reply_markup": admin_kb(uid)})
         return
     
+    # Разбанить
     if data.startswith("unban_do_"):
         target_id = int(data.split("_")[2])
         conn.execute("UPDATE users SET banned = 0 WHERE user_id = ?", (target_id,))
@@ -668,9 +768,7 @@ def handle_cb(cb):
 def main():
     logger.info("🚀 Запуск Plutonium Bot")
     logger.info(f"👑 Владелец: {OWNER_ID}")
-    logger.info(f"📢 Канал подписки ID: {CHANNEL_ID}")
-    logger.info(f"💾 Канал хранения ID: {STORAGE_CHANNEL_ID}")
-    logger.info(f"🗄️ База данных: {'Turso' if USE_TURSO else 'Локальная SQLite'}")
+    logger.info(f"🗄️ База: {'Turso' if USE_TURSO else 'Локальная SQLite'}")
     api("deleteWebhook", {"drop_pending_updates": True})
     offset = 0
     
@@ -702,7 +800,7 @@ def main():
                 user = conn.execute("SELECT banned FROM users WHERE user_id = ?", (uid,)).fetchone()
                 if user and user['banned']:
                     if text == "/start":
-                        api("sendMessage", {"chat_id": uid, "text": "⛔ Вы забанены!\nОбратитесь к администратору."})
+                        api("sendMessage", {"chat_id": uid, "text": "⛔ Вы забанены!"})
                     continue
                 
                 # Регистрация
@@ -715,13 +813,24 @@ def main():
                 conn.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (int(time.time()), uid))
                 conn.commit()
                 
-                # --- КОМАНДА ПОЛУЧЕНИЯ БАЗЫ ДАННЫХ ---
+                # Обновляем счетчик ОП (проверяем подписку на канал)
+                op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
+                if op:
+                    if check_subscription(uid, op['channel_id']):
+                        new_cur = op['current'] + 1
+                        conn.execute("UPDATE op_settings SET current = ? WHERE id = ?", (new_cur, op['id']))
+                        if new_cur >= op['target']:
+                            conn.execute("UPDATE op_settings SET active = 0 WHERE id = ?", (op['id'],))
+                            logger.info(f"ОП выполнена! Набрано {new_cur} из {op['target']}")
+                        conn.commit()
+                
+                # --- КОМАНДА ПОЛУЧЕНИЯ БАЗЫ ---
                 if text == "/getdb":
                     if not is_admin(uid):
-                        api("sendMessage", {"chat_id": uid, "text": "⛔ У вас нет прав для этой команды!"})
+                        api("sendMessage", {"chat_id": uid, "text": "⛔ Нет прав!"})
                         continue
                     
-                    api("sendMessage", {"chat_id": uid, "text": "📦 Выгрузка базы данных\n\n⏳ Подожди, создаю бэкап...\n💾 Файл будет отправлен через несколько секунд", "parse_mode": "HTML"})
+                    api("sendMessage", {"chat_id": uid, "text": get_db_prompt()})
                     
                     try:
                         if USE_TURSO:
@@ -736,20 +845,19 @@ def main():
                                 api("sendDocument", {
                                     "chat_id": uid,
                                     "document": f.read(),
-                                    "caption": f"📦 Бэкап базы данных\n🕐 {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                    "caption": f"📦 Бэкап\n🕐 {time.strftime('%Y-%m-%d %H:%M:%S')}"
                                 })
-                            
                             os.unlink(temp_db.name)
                         else:
                             with open(DB_PATH, 'rb') as f:
                                 api("sendDocument", {
                                     "chat_id": uid,
                                     "document": f.read(),
-                                    "caption": f"📦 Бэкап базы данных\n🕐 {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                    "caption": f"📦 Бэкап\n🕐 {time.strftime('%Y-%m-%d %H:%M:%S')}"
                                 })
                     except Exception as e:
                         logger.error(f"GetDB error: {e}")
-                        api("sendMessage", {"chat_id": uid, "text": "❌ Ошибка при создании бэкапа базы данных"})
+                        api("sendMessage", {"chat_id": uid, "text": get_db_error()})
                     continue
                 
                 # --- ОЖИДАНИЯ ---
@@ -774,7 +882,7 @@ def main():
                             "chat_id": STORAGE_CHANNEL_ID,
                             "from_chat_id": chat_id,
                             "message_id": m['message_id']
-                        })
+                        }, retry=3)
                         
                         if copy_result.get('ok'):
                             stored_msg_id = copy_result['result']['message_id']
@@ -783,7 +891,10 @@ def main():
                                          (file_hash, stored_msg_id, name, description, game, int(time.time()), uid))
                             conn.commit()
                             
-                            file_link = f"https://t.me/plutoniumfilesBot?start={file_hash}"
+                            # Получаем имя бота
+                            bot_info = api("getMe")
+                            bot_username = bot_info.get('result', {}).get('username', 'plutoniumfilesBot')
+                            file_link = f"https://t.me/{bot_username}?start={file_hash}"
                             api("sendMessage", {"chat_id": uid, "text": get_add_file_success(name, description, game, file_link), "parse_mode": "HTML"})
                         else:
                             api("sendMessage", {"chat_id": uid, "text": "❌ Ошибка сохранения файла"})
@@ -794,43 +905,60 @@ def main():
                     waiting[uid] = None
                     continue
                 
-                # ОП - получение ID канала (ИСПРАВЛЕНО)
-                elif waiting.get(uid) == "op_channel_id" and text:
-                    try:
-                        channel_id_str = text.strip()
-                        channel_id = int(channel_id_str)
-                        
-                        logger.info(f"Проверка канала: {channel_id}")
-                        
-                        check_result = api("getChat", {"chat_id": channel_id})
-                        
-                        if not check_result.get('ok'):
-                            api("sendMessage", {"chat_id": uid, "text": f"❌ Канал не найден!\n\nОшибка: {check_result.get('description', 'Неизвестная ошибка')}\n\n💡 Чтобы получить ID канала:\n1. Добавь бота @getmyid_bot в канал\n2. Напиши /start в канале\n3. Скопируй ID (начинается с -100)"})
-                            waiting[uid] = None
-                            continue
-                        
-                        link = get_channel_link(channel_id)
-                        
-                        if link:
-                            conn.execute("UPDATE op_settings SET active = 0")
-                            conn.execute("INSERT INTO op_settings (channel_id, target, current, active, link) VALUES (?, 0, 0, 1, ?)", 
-                                        (channel_id, link))
-                            conn.commit()
-                            api("sendMessage", {"chat_id": uid, "text": get_op_success(channel_id, link), "parse_mode": "HTML"})
-                            logger.info(f"ОП создана для канала {channel_id}")
-                        else:
-                            api("sendMessage", {"chat_id": uid, "text": "❌ Не удалось получить ссылку на канал.\n\nУбедись, что канал публичный или у бота есть права администратора."})
-                    except ValueError:
-                        api("sendMessage", {"chat_id": uid, "text": "❌ Отправь корректный ID канала!\n\nПример: -1001234567890\n\nID должен начинаться с -100"})
-                    except Exception as e:
-                        logger.error(f"OP creation error: {e}")
-                        api("sendMessage", {"chat_id": uid, "text": f"❌ Ошибка: {str(e)}"})
+                # ОП - ввод количества подписчиков
+                elif waiting.get(uid) == "op_target" and text and text.isdigit():
+                    target = int(text)
+                    if target <= 0:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Введи число больше 0"})
+                        continue
                     
-                    waiting[uid] = None
+                    op_temp[uid] = {'target': target}
+                    waiting[uid] = "op_link"
+                    api("sendMessage", {"chat_id": uid, "text": get_op_link_prompt(), "parse_mode": "HTML"})
                     continue
                 
-                                # Реклама
-                elif waiting.get(uid) == "ad_post" and (text or m.get('caption')):
+                # ОП - ввод ссылки или ID канала
+                elif waiting.get(uid) == "op_link" and text:
+                    channel_input = text.strip()
+                    channel_id = None
+                    
+                    # Парсим ID из ссылки или прямого ID
+                    if channel_input.startswith("https://t.me/"):
+                        username = channel_input.replace("https://t.me/", "").split("?")[0]
+                        try:
+                            chat_info = api("getChat", {"chat_id": f"@{username}"})
+                            if chat_info.get('ok'):
+                                channel_id = chat_info['result']['id']
+                        except:
+                            pass
+                    elif channel_input.startswith("-100") and channel_input.lstrip("-").isdigit():
+                        channel_id = int(channel_input)
+                    elif channel_input.isdigit():
+                        channel_id = int(channel_input)
+                    
+                    if not channel_id:
+                        api("sendMessage", {"chat_id": uid, "text": "❌ Не удалось определить ID канала.\n\nОтправь ссылку вида:\nhttps://t.me/канал\nИли ID: -1001234567890"})
+                        continue
+                    
+                    # Проверяем существование канала
+                    check_result = api("getChat", {"chat_id": channel_id})
+                    if not check_result.get('ok'):
+                        api("sendMessage", {"chat_id": uid, "text": f"❌ Канал не найден!\n\nОшибка: {check_result.get('description', 'Неизвестная ошибка')}"})
+                        continue
+                    
+                    op_temp[uid]['channel_id'] = channel_id
+                    
+                    # Показываем кнопку для завершения
+                    link = get_channel_link(channel_id) or str(channel_id)
+                    api("sendMessage", {
+                        "chat_id": uid, 
+                        "text": f"✅ Канал найден!\n\n📢 Канал: {link}\n🎯 Цель: {op_temp[uid]['target']} подписчиков\n\nНажми кнопку для завершения настройки ОП.",
+                        "reply_markup": op_setup_kb()
+                    })
+                    waiting[uid] = None
+                    continue
+                   # Реклама
+                elif waiting.get(uid) == "ad_post" and (text or m.get('caption') or m.get('photo')):
                     waiting[uid] = "ad_time"
                     msg_data = {
                         'message_id': m['message_id'],
@@ -850,7 +978,7 @@ def main():
                     api("sendMessage", {"chat_id": uid, "text": get_ad_time_prompt(), "parse_mode": "HTML"})
                     continue
                 
-                elif waiting.get(uid) == "ad_time" and text.isdigit():
+                elif waiting.get(uid) == "ad_time" and text and text.isdigit():
                     hours = int(text)
                     if 1 <= hours <= 72:
                         expire = int(time.time()) + hours * 3600
@@ -865,19 +993,13 @@ def main():
                         for user in users:
                             try:
                                 if 'text' in msg_data:
-                                    data = {"chat_id": user['user_id'], "text": msg_data['text']}
-                                    if 'entities' in msg_data:
-                                        data["entities"] = msg_data['entities']
-                                    api("sendMessage", data)
+                                    api("sendMessage", {"chat_id": user['user_id'], "text": msg_data['text']})
                                 elif 'caption' in msg_data:
-                                    data = {
+                                    api("sendPhoto", {
                                         "chat_id": user['user_id'],
                                         "photo": msg_data['photo'][-1]['file_id'],
                                         "caption": msg_data['caption']
-                                    }
-                                    if 'caption_entities' in msg_data:
-                                        data["caption_entities"] = msg_data['caption_entities']
-                                    api("sendPhoto", data)
+                                    })
                                 sent += 1
                             except:
                                 pass
@@ -901,8 +1023,7 @@ def main():
                             target_id = user['user_id'] if user else None
                         
                         if target_id:
-                            waiting[uid] = "ban_action"
-                            waiting[f"{uid}_target"] = target_id
+                            waiting[uid] = None
                             api("sendMessage", {"chat_id": uid, "text": f"👤 Пользователь: {target_id}\n\nВыбери действие:", 
                                                "reply_markup": ban_kb(target_id)})
                         else:
@@ -914,7 +1035,7 @@ def main():
                     continue
                 
                 # Рассылка
-                elif waiting.get(uid) == "broadcast" and (text or m.get('caption') or m.get('photo') or m.get('video') or m.get('document')):
+                elif waiting.get(uid) == "broadcast" and (text or m.get('caption') or m.get('photo')):
                     if text == "/cancel":
                         waiting[uid] = None
                         api("sendMessage", {"chat_id": uid, "text": "✅ Рассылка отменена"})
@@ -929,10 +1050,6 @@ def main():
                             preview = m['caption'][:100]
                         elif 'photo' in m:
                             preview = "📸 Фото"
-                        elif 'video' in m:
-                            preview = "🎥 Видео"
-                        elif 'document' in m:
-                            preview = "📄 Документ"
                         
                         api("sendMessage", {"chat_id": uid, "text": f"✅ Сохранено!\n\n{preview}\n\nОтправить всем? (ДА/НЕТ)", "reply_markup": yes_no_kb()})
                     else:
@@ -945,8 +1062,6 @@ def main():
                         msg_data_str = waiting.get(f"{uid}_broadcast")
                         if msg_data_str:
                             msg_data = json.loads(msg_data_str)
-                            logger.info(f"📦 Broadcasting: {msg_data.get('type')}")
-                            
                             sent = send_broadcast(msg_data)
                             api("sendMessage", {"chat_id": uid, "text": get_broadcast_success(sent), "parse_mode": "HTML"})
                         else:
@@ -956,7 +1071,7 @@ def main():
                     
                     if f"{uid}_broadcast" in waiting:
                         del waiting[f"{uid}_broadcast"]
-                    del waiting[uid]
+                    waiting[uid] = None
                     continue
                 
                 # Управление админами
@@ -990,11 +1105,13 @@ def main():
                 
                 # /start
                 if text == "/start":
+                    # Проверка подписки на основной канал
                     if not check_subscription(uid, CHANNEL_ID):
                         api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": get_subscribe_text(), "parse_mode": "HTML", 
                                           "reply_markup": channel_check_kb()})
                         continue
                     
+                    # Проверка ОП
                     op = conn.execute("SELECT * FROM op_settings WHERE active = 1").fetchone()
                     if op:
                         if not check_subscription(uid, op['channel_id']):
@@ -1003,12 +1120,6 @@ def main():
                                 api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": get_op_text(), "parse_mode": "HTML", 
                                                   "reply_markup": op_check_kb(op['channel_id'])})
                             continue
-                        
-                        new_cur = op['current'] + 1
-                        conn.execute("UPDATE op_settings SET current = ? WHERE id = ?", (new_cur, op['id']))
-                        if new_cur >= op['target']:
-                            conn.execute("UPDATE op_settings SET active = 0 WHERE id = ?", (op['id'],))
-                        conn.commit()
                     
                     api("sendPhoto", {"chat_id": uid, "photo": PHOTO_URL, "caption": get_welcome_text(), "parse_mode": "HTML", "reply_markup": main_kb(uid)})
                 
@@ -1016,6 +1127,7 @@ def main():
                 elif text.startswith("/start "):
                     f_hash = text.split(" ")[1]
                     
+                    # Защита от дублей
                     if f_hash in processed_hashes:
                         continue
                     processed_hashes.add(f_hash)
@@ -1043,15 +1155,6 @@ def main():
         except Exception as e:
             logger.error(f"Main loop error: {e}")
             time.sleep(5)
-
-def yes_no_kb():
-    return {
-        "keyboard": [
-            [{"text": "✅ ДА"}, {"text": "❌ НЕТ"}]
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
 
 if __name__ == "__main__":
     main()
